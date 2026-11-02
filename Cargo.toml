@@ -1,0 +1,65 @@
+[package]
+name = "rustmail"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+resolver = "3"
+description = "RustMail - a fast, feature-rich desktop email client with an Outlook-style interface"
+
+[[bin]]
+name = "rustmail"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11", "links"] }
+egui = "0.36"
+egui_extras = { version = "0.36", features = ["image", "http", "file"] }
+egui-phosphor = { version = "0.14", features = ["regular", "fill", "bold"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
+fontdb = "0.24"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+futures = "0.3"
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+webpki-roots = "1"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
+mail-parser = "0.11"
+hickory-resolver = "0.26"
+ureq = "3"
+roxmltree = "0.21"
+ring = "0.17"
+
+rusqlite = { version = "0.41", features = ["bundled"] }
+scraper = "0.29"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+html-escape = "0.2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+keyring = "4"
+rfd = "0.17"
+notify-rust = "4"
+open = "5"
+crossbeam-channel = "0.5"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+regex = "1"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
