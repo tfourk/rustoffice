@@ -1015,7 +1015,14 @@ impl App {
             })
             .collect();
         let has_more = messages.len() >= self.mail.limit;
-        let can_older = matches!(self.mail.view, MailView::Folder(_)) && !searching;
+        // Offline mailboxes (the demo, Outlook imports) have no server to ask.
+        let offline = self
+            .mail
+            .current_folder_id()
+            .and_then(|id| self.mail.find_folder(id))
+            .and_then(|f| self.cfg.account(&f.account_id))
+            .is_some_and(|a| a.is_local());
+        let can_older = matches!(self.mail.view, MailView::Folder(_)) && !searching && !offline;
         let footer = if has_more || can_older { 56.0 } else { 12.0 };
         let total: f32 = heights.iter().sum::<f32>() + footer;
         let scroll_target = if self.mail.scroll_to_selected {

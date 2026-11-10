@@ -4,6 +4,7 @@ pub mod compose;
 pub mod html;
 pub mod mail;
 pub mod oauth_setup;
+pub mod outlook_import;
 pub mod people;
 pub mod settings;
 pub mod shell;
