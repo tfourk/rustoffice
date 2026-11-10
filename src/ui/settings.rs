@@ -966,6 +966,9 @@ impl App {
             setting_row(ui, "Use 24-hour time", "", |ui| {
                 widgets::toggle(ui, &mut self.cfg.appearance.time_24h);
             });
+            setting_row(ui, "Slim toolbar", "One compact row with the everyday commands instead of the ribbon; everything else is in its ⋯ menu", |ui| {
+                widgets::toggle(ui, &mut self.cfg.appearance.slim);
+            });
             setting_row(ui, "Modern title bar", "Draws the search box in the title bar (takes effect after restart)", |ui| {
                 widgets::toggle(ui, &mut self.cfg.appearance.custom_titlebar);
             });

@@ -284,6 +284,9 @@ pub struct AppearanceSettings {
     pub zoom: f32,
     pub custom_titlebar: bool,
     pub time_24h: bool,
+    /// One compact toolbar with the everyday commands instead of the
+    /// tabbed ribbon; the rest lives in its "More" menu.
+    pub slim: bool,
 }
 
 impl Default for AppearanceSettings {
@@ -295,6 +298,7 @@ impl Default for AppearanceSettings {
             zoom: 1.0,
             custom_titlebar: true,
             time_24h: false,
+            slim: false,
         }
     }
 }
