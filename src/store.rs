@@ -120,6 +120,20 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start);
 
+CREATE TABLE IF NOT EXISTS calendars (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT '',
+    remote_id TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    color INTEGER NOT NULL DEFAULT 0,
+    read_only INTEGER NOT NULL DEFAULT 0,
+    visible INTEGER NOT NULL DEFAULT 1,
+    sync_token TEXT NOT NULL DEFAULT '',
+    ctag TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(source, remote_id)
+);
+
 CREATE TABLE IF NOT EXISTS task_lists (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL
@@ -388,7 +402,54 @@ fn migrate(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!("ALTER TABLE messages ADD COLUMN {name} {ty}"))?;
         }
     }
+    migrate_events(conn)
+}
+
+/// Calendar sync columns on `events`, and the local calendar every older
+/// event moves into.
+fn migrate_events(conn: &Connection) -> Result<()> {
+    let mut cols = Vec::new();
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(events)")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        for c in rows {
+            cols.push(c?);
+        }
+    }
+    for (name, ty) in [
+        ("calendar_id", "INTEGER NOT NULL DEFAULT 1"),
+        ("remote_id", "TEXT NOT NULL DEFAULT ''"),
+        ("etag", "TEXT NOT NULL DEFAULT ''"),
+        ("rrule", "TEXT NOT NULL DEFAULT ''"),
+        ("exdates", "TEXT NOT NULL DEFAULT ''"),
+        ("recurrence_id", "INTEGER"),
+        ("tz", "TEXT NOT NULL DEFAULT ''"),
+        ("cancelled", "INTEGER NOT NULL DEFAULT 0"),
+        ("sync_state", "INTEGER NOT NULL DEFAULT 0"),
+        ("meeting_url", "TEXT NOT NULL DEFAULT ''"),
+        ("color", "INTEGER"),
+    ] {
+        if !cols.iter().any(|c| c == name) {
+            conn.execute_batch(&format!("ALTER TABLE events ADD COLUMN {name} {ty}"))?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_events_calendar ON events(calendar_id, remote_id);
+         CREATE INDEX IF NOT EXISTS idx_events_uid ON events(uid);",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO calendars (id, source, remote_id, name, color, position) VALUES (?1, '', 'local', 'Calendar', ?2, 0)",
+        params![LOCAL_CALENDAR, 0x0F6CBDu32],
+    )?;
     Ok(())
+}
+
+fn join_ts(v: &[i64]) -> String {
+    v.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(",")
+}
+
+fn split_ts(s: &str) -> Vec<i64> {
+    s.split(',').filter_map(|t| t.trim().parse().ok()).collect()
 }
 
 impl Store {
@@ -411,6 +472,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Store { conn })
     }
 
@@ -1297,17 +1359,33 @@ impl Store {
             show_as: ShowAs::parse(&r.get::<_, String>(12)?),
             organizer: r.get(13)?,
             attendees: r.get(14)?,
+            calendar_id: r.get(15)?,
+            remote_id: r.get(16)?,
+            etag: r.get(17)?,
+            rrule: r.get(18)?,
+            exdates: split_ts(&r.get::<_, String>(19)?),
+            recurrence_id: r.get(20)?,
+            tz: r.get(21)?,
+            cancelled: r.get(22)?,
+            sync_state: SyncState::from_i64(r.get(23)?),
+            meeting_url: r.get(24)?,
+            color: r.get::<_, Option<i64>>(25)?.map(|c| c as u32),
         })
     }
 
     const EVENT_COLS: &'static str = "id, uid, title, location, description, start, end, all_day, \
-        reminder_min, category, repeat, repeat_until, show_as, organizer, attendees";
+        reminder_min, category, repeat, repeat_until, show_as, organizer, attendees, calendar_id, \
+        remote_id, etag, rrule, exdates, recurrence_id, tz, cancelled, sync_state, meeting_url, color";
 
-    /// Events that may have occurrences in `[start, end)`.
+    /// Events that may have occurrences in `[start, end)`, from every
+    /// calendar (callers filter hidden calendars). Events deleted here but not
+    /// yet on the server are left out.
     pub fn events_between(&self, start: i64, end: i64) -> Result<Vec<CalEvent>> {
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT {} FROM events WHERE (repeat = 'none' AND start < ?2 AND end > ?1) \
-             OR (repeat != 'none' AND start < ?2 AND (repeat_until IS NULL OR repeat_until >= ?1)) \
+            "SELECT {} FROM events WHERE sync_state != 2 AND ( \
+               ((repeat = 'none' AND rrule = '') AND start < ?2 AND end > ?1) \
+               OR ((repeat != 'none' OR rrule != '') AND start < ?2 AND (repeat_until IS NULL OR repeat_until >= ?1)) \
+               OR (recurrence_id IS NOT NULL AND recurrence_id < ?2 AND recurrence_id + (end - start) > ?1)) \
              ORDER BY start",
             Self::EVENT_COLS
         ))?;
@@ -1332,72 +1410,277 @@ impl Store {
         Ok(self
             .conn
             .query_row(
-                &format!("SELECT {} FROM events WHERE uid = ?1", Self::EVENT_COLS),
+                &format!("SELECT {} FROM events WHERE uid = ?1 AND recurrence_id IS NULL AND sync_state != 2", Self::EVENT_COLS),
                 [uid],
                 Self::event_from_row,
             )
             .optional()?)
     }
 
-    pub fn save_event(&self, e: &CalEvent) -> Result<i64> {
+    /// Writes every column of `e` (insert when `e.id` is 0) exactly as given.
+    fn write_event(&self, e: &CalEvent) -> Result<i64> {
         let uid = if e.uid.is_empty() {
             format!("{}@rustmail", uuid::Uuid::new_v4())
         } else {
             e.uid.clone()
         };
+        let calendar_id = if e.calendar_id == 0 { LOCAL_CALENDAR } else { e.calendar_id };
+        let values = params![
+            uid,
+            e.title,
+            e.location,
+            e.description,
+            e.start,
+            e.end,
+            e.all_day,
+            e.reminder_min,
+            e.category,
+            e.repeat.as_str(),
+            e.repeat_until,
+            e.show_as.as_str(),
+            e.organizer,
+            e.attendees,
+            calendar_id,
+            e.remote_id,
+            e.etag,
+            e.rrule,
+            join_ts(&e.exdates),
+            e.recurrence_id,
+            e.tz,
+            e.cancelled,
+            e.sync_state.as_i64(),
+            e.meeting_url,
+            e.color.map(|c| c as i64),
+        ];
         if e.id > 0 {
+            let mut v: Vec<&dyn rusqlite::ToSql> = values.to_vec();
+            v.push(&e.id);
             self.conn.execute(
-                "UPDATE events SET uid=?2, title=?3, location=?4, description=?5, start=?6, end=?7, \
-                 all_day=?8, reminder_min=?9, category=?10, repeat=?11, repeat_until=?12, show_as=?13, \
-                 organizer=?14, attendees=?15 WHERE id=?1",
-                params![
-                    e.id,
-                    uid,
-                    e.title,
-                    e.location,
-                    e.description,
-                    e.start,
-                    e.end,
-                    e.all_day,
-                    e.reminder_min,
-                    e.category,
-                    e.repeat.as_str(),
-                    e.repeat_until,
-                    e.show_as.as_str(),
-                    e.organizer,
-                    e.attendees
-                ],
+                "UPDATE events SET uid=?1, title=?2, location=?3, description=?4, start=?5, end=?6, \
+                 all_day=?7, reminder_min=?8, category=?9, repeat=?10, repeat_until=?11, show_as=?12, \
+                 organizer=?13, attendees=?14, calendar_id=?15, remote_id=?16, etag=?17, rrule=?18, \
+                 exdates=?19, recurrence_id=?20, tz=?21, cancelled=?22, sync_state=?23, meeting_url=?24, \
+                 color=?25 WHERE id=?26",
+                v.as_slice(),
             )?;
             Ok(e.id)
         } else {
             self.conn.execute(
                 "INSERT INTO events (uid, title, location, description, start, end, all_day, \
-                 reminder_min, category, repeat, repeat_until, show_as, organizer, attendees) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                params![
-                    uid,
-                    e.title,
-                    e.location,
-                    e.description,
-                    e.start,
-                    e.end,
-                    e.all_day,
-                    e.reminder_min,
-                    e.category,
-                    e.repeat.as_str(),
-                    e.repeat_until,
-                    e.show_as.as_str(),
-                    e.organizer,
-                    e.attendees
-                ],
+                 reminder_min, category, repeat, repeat_until, show_as, organizer, attendees, calendar_id, \
+                 remote_id, etag, rrule, exdates, recurrence_id, tz, cancelled, sync_state, meeting_url, color) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, \
+                 ?20, ?21, ?22, ?23, ?24, ?25)",
+                values,
             )?;
             Ok(self.conn.last_insert_rowid())
         }
     }
 
+    fn calendar_is_local(&self, id: i64) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT source = '' FROM calendars WHERE id = ?1", [id], |r| r.get::<_, bool>(0))
+            .optional()?
+            .unwrap_or(true))
+    }
+
+    /// Saves an event edited by the person. In a synced calendar it is marked
+    /// for upload.
+    pub fn save_event(&self, e: &CalEvent) -> Result<i64> {
+        let mut e = e.clone();
+        if e.calendar_id == 0 {
+            e.calendar_id = LOCAL_CALENDAR;
+        }
+        e.sync_state = if self.calendar_is_local(e.calendar_id)? { SyncState::Clean } else { SyncState::Changed };
+        self.write_event(&e)
+    }
+
+    /// Deletes an event (with its changed occurrences) for the person. In a
+    /// synced calendar the rows stay hidden until the server deleted them.
     pub fn delete_event(&self, id: i64) -> Result<()> {
+        let Some(e) = self.event(id)? else { return Ok(()) };
+        let series = |sql: &str| -> Result<()> {
+            if e.recurrence_id.is_none() {
+                self.conn.execute(sql, params![e.calendar_id, e.uid, e.id])?;
+            }
+            Ok(())
+        };
+        if self.calendar_is_local(e.calendar_id)? || e.remote_id.is_empty() {
+            series("DELETE FROM events WHERE calendar_id = ?1 AND uid = ?2 AND recurrence_id IS NOT NULL AND id != ?3")?;
+            self.conn.execute("DELETE FROM events WHERE id = ?1", [id])?;
+        } else {
+            series("UPDATE events SET sync_state = 2 WHERE calendar_id = ?1 AND uid = ?2 AND recurrence_id IS NOT NULL AND id != ?3")?;
+            self.conn.execute("UPDATE events SET sync_state = 2 WHERE id = ?1", [id])?;
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------- calendars
+
+    fn calendar_from_row(r: &Row) -> rusqlite::Result<Calendar> {
+        Ok(Calendar {
+            id: r.get(0)?,
+            source: r.get(1)?,
+            remote_id: r.get(2)?,
+            name: r.get(3)?,
+            color: r.get::<_, i64>(4)? as u32,
+            read_only: r.get(5)?,
+            visible: r.get(6)?,
+            sync_token: r.get(7)?,
+            ctag: r.get(8)?,
+            position: r.get(9)?,
+        })
+    }
+
+    const CAL_COLS: &'static str = "id, source, remote_id, name, color, read_only, visible, sync_token, ctag, position";
+
+    pub fn calendars(&self) -> Result<Vec<Calendar>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {} FROM calendars ORDER BY source != '', source, position, name COLLATE NOCASE",
+            Self::CAL_COLS
+        ))?;
+        let rows = stmt.query_map([], Self::calendar_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn calendar(&self, id: i64) -> Result<Option<Calendar>> {
+        Ok(self
+            .conn
+            .query_row(&format!("SELECT {} FROM calendars WHERE id = ?1", Self::CAL_COLS), [id], Self::calendar_from_row)
+            .optional()?)
+    }
+
+    pub fn calendars_of_source(&self, source: &str) -> Result<Vec<Calendar>> {
+        Ok(self.calendars()?.into_iter().filter(|c| c.source == source).collect())
+    }
+
+    /// Adds or updates a synced calendar (matched by source + remote id);
+    /// keeps the person's visibility choice and the sync state. Returns its id.
+    pub fn upsert_calendar(&self, c: &Calendar) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO calendars (source, remote_id, name, color, read_only, visible, position) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(source, remote_id) DO UPDATE SET name = excluded.name, color = excluded.color, \
+             read_only = excluded.read_only, position = excluded.position",
+            params![c.source, c.remote_id, c.name, c.color as i64, c.read_only, c.visible, c.position],
+        )?;
+        Ok(self.conn.query_row(
+            "SELECT id FROM calendars WHERE source = ?1 AND remote_id = ?2",
+            params![c.source, c.remote_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn set_calendar_visible(&self, id: i64, visible: bool) -> Result<()> {
+        self.conn.execute("UPDATE calendars SET visible = ?2 WHERE id = ?1", params![id, visible])?;
+        Ok(())
+    }
+
+    pub fn set_calendar_sync_state(&self, id: i64, sync_token: &str, ctag: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE calendars SET sync_token = ?2, ctag = ?3 WHERE id = ?1", params![id, sync_token, ctag])?;
+        Ok(())
+    }
+
+    /// Removes a calendar and all its events (local calendar excluded).
+    pub fn delete_calendar(&self, id: i64) -> Result<()> {
+        if id == LOCAL_CALENDAR {
+            return Ok(());
+        }
+        self.conn.execute("DELETE FROM events WHERE calendar_id = ?1", [id])?;
+        self.conn.execute("DELETE FROM calendars WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Removes every calendar of a source (when it is removed or disabled).
+    pub fn delete_calendars_of_source(&self, source: &str) -> Result<()> {
+        if source.is_empty() {
+            return Ok(());
+        }
+        for c in self.calendars_of_source(source)? {
+            self.delete_calendar(c.id)?;
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------- calendar sync io
+
+    /// All rows of a calendar sharing one remote resource / event id
+    /// (a series with its changed occurrences).
+    pub fn events_by_remote(&self, calendar_id: i64, remote_id: &str) -> Result<Vec<CalEvent>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT {} FROM events WHERE calendar_id = ?1 AND remote_id = ?2 ORDER BY recurrence_id IS NOT NULL, recurrence_id",
+            Self::EVENT_COLS
+        ))?;
+        let rows = stmt
+            .query_map(params![calendar_id, remote_id], Self::event_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn events_of_calendar(&self, calendar_id: i64) -> Result<Vec<CalEvent>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(&format!("SELECT {} FROM events WHERE calendar_id = ?1", Self::EVENT_COLS))?;
+        let rows = stmt
+            .query_map([calendar_id], Self::event_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Events of a calendar with local changes to upload.
+    pub fn pending_events(&self, calendar_id: i64) -> Result<Vec<CalEvent>> {
+        Ok(self.events_of_calendar(calendar_id)?.into_iter().filter(|e| e.sync_state != SyncState::Clean).collect())
+    }
+
+    /// Replaces the stored copy of one remote resource with what the server
+    /// has (a series and its changed occurrences, all with `remote_id` set).
+    /// Rows with local changes not yet uploaded are left alone.
+    pub fn replace_remote(&self, calendar_id: i64, remote_id: &str, events: &[CalEvent]) -> Result<()> {
+        let existing = self.events_by_remote(calendar_id, remote_id)?;
+        if existing.iter().any(|e| e.sync_state != SyncState::Clean) {
+            return Ok(());
+        }
+        self.conn.execute("DELETE FROM events WHERE calendar_id = ?1 AND remote_id = ?2", params![calendar_id, remote_id])?;
+        for e in events {
+            let mut e = e.clone();
+            e.id = 0;
+            e.calendar_id = calendar_id;
+            e.remote_id = remote_id.to_string();
+            e.sync_state = SyncState::Clean;
+            self.write_event(&e)?;
+        }
+        Ok(())
+    }
+
+    /// The server deleted a resource (local unsent changes are kept).
+    pub fn remove_remote(&self, calendar_id: i64, remote_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM events WHERE calendar_id = ?1 AND remote_id = ?2 AND sync_state != 1",
+            params![calendar_id, remote_id],
+        )?;
+        Ok(())
+    }
+
+    /// After an upload: the server's id / etag; the change is no longer pending.
+    pub fn mark_event_synced(&self, id: i64, remote_id: &str, etag: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE events SET remote_id = ?2, etag = ?3, sync_state = 0 WHERE id = ?1",
+            params![id, remote_id, etag],
+        )?;
+        Ok(())
+    }
+
+    /// Drops rows whose deletion reached the server.
+    pub fn purge_event(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM events WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// Writes an event exactly as given (sync code; no state changes).
+    pub fn put_event_raw(&self, e: &CalEvent) -> Result<i64> {
+        self.write_event(e)
     }
 
     // ------------------------------------------------------------------ tasks

@@ -31,8 +31,10 @@ OPTIONS:
     --theme <light|dark>   Override the theme for this run
     --open-first           Open the first message of the inbox
     --compose              Open a sample message in the composer
-    --settings             Open the settings dialog
+    --settings [accounts]  Open the settings dialog (optionally at Accounts)
     --wizard               Open the add-account wizard
+    --add-account <EMAIL>  Start adding the account with this address
+    --google-setup         Open the Google sign-in setup guide
     -h, --help             Show this help
     -V, --version          Show the version
 ";
@@ -48,6 +50,9 @@ fn main() -> eframe::Result<()> {
         settings: false,
         wizard: false,
         open_subject: None,
+        add_account: None,
+        google_setup: false,
+        settings_accounts: false,
         search: None,
         month: false,
         contact: None,
@@ -94,8 +99,19 @@ fn main() -> eframe::Result<()> {
                 start.open_subject = args.get(i).cloned();
             }
             "--compose" => start.compose = true,
-            "--settings" => start.settings = true,
+            "--settings" => {
+                start.settings = true;
+                if args.get(i + 1).is_some_and(|a| a == "accounts") {
+                    i += 1;
+                    start.settings_accounts = true;
+                }
+            }
             "--wizard" => start.wizard = true,
+            "--add-account" => {
+                i += 1;
+                start.add_account = args.get(i).cloned();
+            }
+            "--google-setup" => start.google_setup = true,
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());

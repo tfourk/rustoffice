@@ -42,10 +42,22 @@ fn transport(server: &ServerConfig, creds: &Credentials) -> Result<AsyncSmtpTran
     Ok(builder.build())
 }
 
-fn friendly(e: lettre::transport::smtp::Error) -> anyhow::Error {
+fn friendly(e: lettre::transport::smtp::Error, oauth: bool) -> anyhow::Error {
     let msg = e.to_string();
     let lower = msg.to_lowercase();
-    if lower.contains("535") || lower.contains("authentication") || lower.contains("credentials") {
+    // Gmail answers a bad XOAUTH2 token with an error challenge, which lettre
+    // reports as "This mechanism does not expect a challenge".
+    let auth = lower.contains("535")
+        || lower.contains("authentication")
+        || lower.contains("credentials")
+        || lower.contains("does not expect a challenge");
+    if auth && oauth {
+        return anyhow!(
+            "The outgoing server didn't accept the browser sign-in. {} ({msg})",
+            super::oauth::SIGN_IN_AGAIN
+        );
+    }
+    if auth {
         anyhow!("The outgoing server rejected your sign-in. Check the SMTP user name and password. ({msg})")
     } else if lower.contains("timed out") || lower.contains("timeout") {
         anyhow!("The outgoing server did not respond in time ({msg})")
@@ -76,7 +88,7 @@ pub async fn send(
         return Err(anyhow!("The message has no valid recipients"));
     }
     let envelope = Envelope::new(Some(from_addr), to).map_err(|e| anyhow!("{e}"))?;
-    t.send_raw(&envelope, raw).await.map_err(friendly)?;
+    t.send_raw(&envelope, raw).await.map_err(|e| friendly(e, creds.oauth))?;
     Ok(())
 }
 
@@ -85,6 +97,6 @@ pub async fn test(server: &ServerConfig, creds: &Credentials) -> Result<()> {
     match t.test_connection().await {
         Ok(true) => Ok(()),
         Ok(false) => Err(anyhow!("The outgoing server did not accept the connection")),
-        Err(e) => Err(friendly(e)),
+        Err(e) => Err(friendly(e, creds.oauth)),
     }
 }

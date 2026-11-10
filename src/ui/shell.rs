@@ -673,6 +673,7 @@ impl App {
                                     let label = match a {
                                         ToastAction::Undo(_) | ToastAction::UndoSend(_) => "Undo",
                                         ToastAction::OpenAccounts => "Settings",
+                                        ToastAction::SignIn(_) => "Sign in",
                                     };
                                     let r = ui.add(
                                         egui::Button::new(RichText::new(label).font(font_semibold(13.0)).color(mix(p.accent, Color32::WHITE, 0.55)))
@@ -699,6 +700,12 @@ impl App {
                 ToastAction::Undo(op) => self.undo(op),
                 ToastAction::UndoSend(outbox) => self.undo_send(outbox),
                 ToastAction::OpenAccounts => self.settings = Some(SettingsState::accounts()),
+                ToastAction::SignIn(id) => {
+                    self.settings = Some(match self.cfg.account(&id) {
+                        Some(acc) => SettingsState::edit_account(acc),
+                        None => SettingsState::accounts(),
+                    })
+                }
             }
         }
     }
@@ -977,6 +984,7 @@ impl App {
     }
 
     pub fn remove_account(&mut self, account_id: &str) {
+        self.engine.send(crate::engine::Command::OAuthCancel { account_id: account_id.to_string() });
         self.cfg.accounts.retain(|a| a.id != account_id);
         self.cfg.favorites.retain(|f| f.account_id != account_id);
         if self.cfg.default_account == account_id {

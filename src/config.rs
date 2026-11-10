@@ -58,6 +58,95 @@ pub struct OAuthConfig {
     pub auth_url: String,
     pub token_url: String,
     pub scopes: String,
+    /// Permissions the person actually granted at the last sign-in (the
+    /// token response's `scope`); empty when unknown (older sign-ins).
+    pub granted: String,
+}
+
+/// An app key ("OAuth client") registered with Google Cloud or Microsoft
+/// Entra. Every account of that provider signs in with it, so it only has
+/// to be set up once per computer.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OAuthClientKey {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Google Cloud project the key belongs to (used for links into the console).
+    pub project_id: String,
+    /// Where the key came from, shown in Settings (e.g. the downloaded file's name).
+    pub source: String,
+}
+
+impl OAuthClientKey {
+    pub fn is_set(&self) -> bool {
+        !self.client_id.trim().is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OAuthApps {
+    pub google: OAuthClientKey,
+    pub microsoft: OAuthClientKey,
+}
+
+impl OAuthApps {
+    pub fn get(&self, provider: &str) -> Option<&OAuthClientKey> {
+        match provider {
+            "google" => Some(&self.google),
+            "microsoft" => Some(&self.microsoft),
+            _ => None,
+        }
+    }
+
+    pub fn get_mut(&mut self, provider: &str) -> Option<&mut OAuthClientKey> {
+        match provider {
+            "google" => Some(&mut self.google),
+            "microsoft" => Some(&mut self.microsoft),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CalendarSourceKind {
+    /// Google Calendar API, signed in through a Google mail account.
+    #[default]
+    Google,
+    /// Any CalDAV server (iCloud, Fastmail, Nextcloud, Yahoo, …).
+    CalDav,
+}
+
+/// Where synced calendars come from. Each source has any number of
+/// calendars (see `model::Calendar::source`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CalendarSource {
+    pub id: String,
+    pub label: String,
+    pub kind: CalendarSourceKind,
+    /// Google: the mail account whose sign-in is used. CalDAV: the mail
+    /// account whose password is reused (empty: own password in the keychain).
+    pub account_id: String,
+    /// CalDAV: server address or calendar-home URL; discovery starts here.
+    pub url: String,
+    /// CalDAV user name (empty: the mail account's user name).
+    pub username: String,
+    pub enabled: bool,
+}
+
+impl Default for CalendarSource {
+    fn default() -> Self {
+        CalendarSource {
+            id: uuid::Uuid::new_v4().to_string(),
+            label: String::new(),
+            kind: CalendarSourceKind::Google,
+            account_id: String::new(),
+            url: String::new(),
+            username: String::new(),
+            enabled: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -284,6 +373,10 @@ pub struct CalendarSettings {
     pub default_reminder_min: i64,
     pub default_duration_min: i64,
     pub show_week_numbers: bool,
+    /// Minutes between automatic calendar syncs.
+    pub sync_interval_min: u32,
+    /// Calendar new events go into (a `Calendar` id).
+    pub default_calendar: i64,
 }
 
 impl Default for CalendarSettings {
@@ -295,6 +388,8 @@ impl Default for CalendarSettings {
             default_reminder_min: 15,
             default_duration_min: 30,
             show_week_numbers: false,
+            sync_interval_min: 10,
+            default_calendar: crate::model::LOCAL_CALENDAR,
         }
     }
 }
@@ -490,6 +585,11 @@ pub struct AppConfig {
     pub favorites: Vec<FavoriteRef>,
     pub window: WindowState,
     pub onboarded: bool,
+    /// Shared Google / Microsoft sign-in keys.
+    pub oauth_apps: OAuthApps,
+    /// Keys from older per-account settings were copied into `oauth_apps`.
+    pub oauth_keys_adopted: bool,
+    pub calendar_sources: Vec<CalendarSource>,
 }
 
 impl Default for AppConfig {
@@ -507,6 +607,9 @@ impl Default for AppConfig {
             favorites: Vec::new(),
             window: WindowState::default(),
             onboarded: false,
+            oauth_apps: OAuthApps::default(),
+            oauth_keys_adopted: false,
+            calendar_sources: Vec::new(),
         }
     }
 }
@@ -576,16 +679,32 @@ impl AppConfig {
         let file = paths.config_file();
         match std::fs::read_to_string(&file) {
             Ok(text) => match toml::from_str::<AppConfig>(&text) {
-                Ok(cfg) => (cfg, None),
+                Ok(mut cfg) => {
+                    if !cfg.oauth_keys_adopted {
+                        cfg.adopt_account_keys();
+                        cfg.oauth_keys_adopted = true;
+                    }
+                    (cfg, None)
+                }
                 Err(e) => {
                     let _ = std::fs::copy(&file, file.with_extension("toml.bak"));
                     (
-                        AppConfig::default(),
+                        AppConfig::fresh(),
                         Some(format!("Your settings file could not be read and was reset: {e}")),
                     )
                 }
             },
-            Err(_) => (AppConfig::default(), None),
+            Err(_) => (AppConfig::fresh(), None),
+        }
+    }
+
+    /// A brand-new config: it has no older per-account keys to adopt.
+    /// (`Default` keeps `oauth_keys_adopted` false so that files written by
+    /// older versions, which lack the field, are migrated once.)
+    fn fresh() -> AppConfig {
+        AppConfig {
+            oauth_keys_adopted: true,
+            ..AppConfig::default()
         }
     }
 
@@ -594,6 +713,27 @@ impl AppConfig {
         std::fs::create_dir_all(&paths.config_dir)?;
         let text = toml::to_string_pretty(self)?;
         write_atomic(&paths.config_file(), text.as_bytes())
+    }
+
+    /// Older versions kept the OAuth client in each account; share the first
+    /// one found so new accounts of that provider can use it. Runs once, so a
+    /// key the person later forgets stays forgotten.
+    fn adopt_account_keys(&mut self) {
+        for acc in &self.accounts {
+            if acc.auth != AuthKind::OAuth2 || acc.oauth.client_id.trim().is_empty() {
+                continue;
+            }
+            if let Some(key) = self.oauth_apps.get_mut(&acc.oauth.provider) {
+                if !key.is_set() {
+                    *key = OAuthClientKey {
+                        client_id: acc.oauth.client_id.trim().to_string(),
+                        client_secret: acc.oauth.client_secret.trim().to_string(),
+                        project_id: String::new(),
+                        source: format!("from the account {}", acc.email),
+                    };
+                }
+            }
+        }
     }
 
     pub fn account(&self, id: &str) -> Option<&AccountConfig> {

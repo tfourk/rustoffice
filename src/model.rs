@@ -440,6 +440,63 @@ impl ShowAs {
     }
 }
 
+/// Id of the calendar that lives only on this computer (always present).
+pub const LOCAL_CALENDAR: i64 = 1;
+
+/// A calendar: the local one, or one synced from Google / a CalDAV server.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Calendar {
+    pub id: i64,
+    /// `CalendarSource::id` it syncs with; empty for the local calendar.
+    pub source: String,
+    /// Google calendar id, or the CalDAV collection URL.
+    pub remote_id: String,
+    pub name: String,
+    /// 0xRRGGBB
+    pub color: u32,
+    pub read_only: bool,
+    pub visible: bool,
+    /// Incremental sync state: Google `nextSyncToken` or CalDAV `sync-token`.
+    pub sync_token: String,
+    /// CalDAV `getctag` (servers without sync-collection).
+    pub ctag: String,
+    pub position: i64,
+}
+
+impl Calendar {
+    pub fn is_local(&self) -> bool {
+        self.source.is_empty()
+    }
+}
+
+/// Local changes not yet sent to the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SyncState {
+    #[default]
+    Clean,
+    /// Created or edited here.
+    Changed,
+    /// Deleted here; the row is hidden until the server has it deleted too.
+    Deleted,
+}
+
+impl SyncState {
+    pub fn as_i64(self) -> i64 {
+        match self {
+            SyncState::Clean => 0,
+            SyncState::Changed => 1,
+            SyncState::Deleted => 2,
+        }
+    }
+    pub fn from_i64(v: i64) -> Self {
+        match v {
+            1 => SyncState::Changed,
+            2 => SyncState::Deleted,
+            _ => SyncState::Clean,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CalEvent {
     pub id: i64,
@@ -452,11 +509,36 @@ pub struct CalEvent {
     pub all_day: bool,
     pub reminder_min: Option<i64>,
     pub category: String,
+    /// Simple repeat choice shown in the editor. When `rrule` is set this is
+    /// only its closest approximation.
     pub repeat: RepeatFreq,
     pub repeat_until: Option<i64>,
     pub show_as: ShowAs,
     pub organizer: String,
     pub attendees: String,
+    /// Calendar the event belongs to (`LOCAL_CALENDAR` for local events).
+    pub calendar_id: i64,
+    /// Google event id or CalDAV resource URL; empty until first synced.
+    pub remote_id: String,
+    pub etag: String,
+    /// Full RFC 5545 RRULE value (without "RRULE:") for rules `repeat` can't
+    /// express, e.g. "FREQ=MONTHLY;BYDAY=2MO;COUNT=10". Empty = use `repeat`.
+    pub rrule: String,
+    /// Start times of occurrences removed from the series (EXDATE).
+    pub exdates: Vec<i64>,
+    /// Set on a changed single occurrence of a series: the start time of the
+    /// occurrence it replaces. Such rows share the series' `uid`.
+    pub recurrence_id: Option<i64>,
+    /// IANA time zone the times are meant in (repeats follow its DST rules);
+    /// empty = this computer's zone.
+    pub tz: String,
+    /// A cancelled occurrence (only meaningful with `recurrence_id`).
+    pub cancelled: bool,
+    pub sync_state: SyncState,
+    /// Online meeting link (Google Meet etc.).
+    pub meeting_url: String,
+    /// Event-specific colour (0xRRGGBB) overriding the calendar's.
+    pub color: Option<u32>,
 }
 
 /// One concrete instance of a (possibly repeating) event.

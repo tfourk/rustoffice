@@ -38,6 +38,8 @@ pub enum ToastAction {
     Undo(u64),
     UndoSend(i64),
     OpenAccounts,
+    /// Opens the account so the person can sign in with the browser again.
+    SignIn(String),
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +86,9 @@ pub struct StartOptions {
     pub search: Option<String>,
     pub month: bool,
     pub contact: Option<String>,
+    pub add_account: Option<String>,
+    pub google_setup: bool,
+    pub settings_accounts: bool,
 }
 
 pub struct App {
@@ -95,6 +100,10 @@ pub struct App {
     pub module: Module,
     pub ribbon_tab: usize,
     pub statuses: BTreeMap<String, SyncStatus>,
+    /// Calendar sync status per `CalendarSource` id.
+    pub cal_statuses: BTreeMap<String, crate::engine::calsync::SourceStatus>,
+    /// Latest result of a CalDAV connection test (Settings → Calendar).
+    pub caldav_test: Option<Result<Vec<crate::engine::calsync::RemoteCalendar>, String>>,
     pub toasts: Vec<Toast>,
     pub next_id: u64,
     pub pending_ops: Vec<PendingOp>,
@@ -161,6 +170,8 @@ impl App {
             module: start.module.unwrap_or(Module::Mail),
             ribbon_tab: 0,
             statuses: BTreeMap::new(),
+            cal_statuses: BTreeMap::new(),
+            caldav_test: None,
             toasts: Vec::new(),
             next_id: 1,
             pending_ops: Vec::new(),
@@ -196,8 +207,23 @@ impl App {
         if app.cfg.accounts.is_empty() || app.start.wizard {
             app.wizard = Some(WizardState::new(app.cfg.accounts.is_empty()));
         }
+        if let Some(email) = app.start.add_account.clone().filter(|e| crate::util::is_valid_email(e)) {
+            let mut w = WizardState::new(false);
+            w.email = email.trim().to_string();
+            w.step = crate::ui::wizard::Step::Discovering;
+            app.engine.send(crate::engine::Command::Discover { email: w.email.clone() });
+            app.wizard = Some(w);
+        }
         if app.start.settings {
-            app.settings = Some(SettingsState::default());
+            app.settings = Some(if app.start.settings_accounts { SettingsState::accounts() } else { SettingsState::default() });
+        }
+        if app.start.google_setup {
+            let mut st = SettingsState::accounts();
+            st.google_setup = Some(crate::ui::oauth_setup::GoogleSetup::new());
+            app.settings = Some(st);
+        }
+        if crate::engine::calsync::ensure_auto_sources(&app.cfg.accounts, &mut app.cfg.calendar_sources) {
+            app.save_config_now();
         }
         app.mail.select_default_folder(&app.store, &app.cfg);
         app
@@ -242,6 +268,9 @@ impl App {
 
     pub fn save_config_now(&mut self) {
         self.cfg_dirty_at = None;
+        // Calendar sources follow the mail accounts (Google, known CalDAV providers).
+        crate::engine::calsync::ensure_auto_sources(&self.cfg.accounts, &mut self.cfg.calendar_sources);
+        self.prune_calendars();
         util::set_time_24h(self.cfg.appearance.time_24h);
         util::set_first_day_monday(self.cfg.calendar.first_day_monday);
         if let Err(e) = self.cfg.save() {
@@ -249,6 +278,24 @@ impl App {
         }
         self.engine
             .send(Command::ConfigChanged(Box::new(self.cfg.clone())));
+    }
+
+    /// Drops synced calendars whose source is gone or turned off.
+    pub fn prune_calendars(&mut self) {
+        let active: Vec<String> = self.cfg.calendar_sources.iter().filter(|s| s.enabled).map(|s| s.id.clone()).collect();
+        let mut removed = false;
+        for c in self.store.calendars().unwrap_or_default() {
+            if !c.source.is_empty() && !active.contains(&c.source) {
+                let _ = self.store.delete_calendar(c.id);
+                removed = true;
+            }
+        }
+        if removed {
+            self.cal.dirty = true;
+        }
+        if self.store.calendar(self.cfg.calendar.default_calendar).ok().flatten().is_none() {
+            self.cfg.calendar.default_calendar = crate::model::LOCAL_CALENDAR;
+        }
     }
 
     pub fn account_name(&self, id: &str) -> String {
@@ -310,11 +357,12 @@ impl App {
                         let changed = !matches!(self.statuses.get(&account_id), Some(SyncStatus::Error(old)) if old == e);
                         if changed {
                             let name = self.account_name(&account_id);
-                            self.toast_with(
-                                format!("{name}: {e}"),
-                                ToastKind::Error,
-                                Some(ToastAction::OpenAccounts),
-                            );
+                            let action = if e.contains(crate::engine::oauth::SIGN_IN_AGAIN) {
+                                ToastAction::SignIn(account_id.clone())
+                            } else {
+                                ToastAction::OpenAccounts
+                            };
+                            self.toast_with(format!("{name}: {e}"), ToastKind::Error, Some(action));
                         }
                     }
                     self.statuses.insert(account_id, status);
@@ -377,20 +425,78 @@ impl App {
                         w.on_discovered(&email, result);
                     }
                 }
-                Event::OAuthResult { account_id, result } => {
+                Event::CalendarStatus { source_id, status } => {
+                    self.cal_statuses.insert(source_id, status);
+                }
+                Event::CalendarsChanged => {
+                    self.cal.dirty = true;
+                }
+                Event::CalDavTestResult { result } => {
+                    self.caldav_test = Some(result);
+                }
+                Event::OAuthUrl { account_id, url } => {
                     if let Some(w) = self.wizard.as_mut() {
-                        w.on_oauth(&account_id, result.clone());
+                        w.on_oauth_url(&account_id, &url);
                     }
                     if let Some(s) = self.settings.as_mut() {
-                        s.on_oauth(&account_id, result.clone());
+                        s.on_oauth_url(&account_id, &url);
+                    }
+                }
+                Event::OAuthResult { account_id, result } => {
+                    if let Some(w) = self.wizard.as_mut() {
+                        w.on_oauth(&account_id, &result);
+                    }
+                    if let Some(s) = self.settings.as_mut() {
+                        s.on_oauth(&account_id, &result);
                     }
                     match result {
-                        Ok(()) => {
-                            self.toast("Signed in", ToastKind::Success);
-                            self.engine.send(Command::SyncAccount { account_id, full: false });
+                        Ok(oauth) => {
+                            // The new token only works with the key it was issued for,
+                            // so an existing account switches to that key right away.
+                            let mut changed = false;
+                            if let Some(acc) = self.cfg.account_mut(&account_id) {
+                                acc.oauth = (*oauth).clone();
+                                acc.auth = crate::config::AuthKind::OAuth2;
+                                changed = true;
+                            }
+                            // Remember a Microsoft app key once it has worked.
+                            if oauth.provider == "microsoft" && crate::engine::oauth::builtin_key("microsoft").is_none() {
+                                let ms = &mut self.cfg.oauth_apps.microsoft;
+                                if ms.client_id != oauth.client_id {
+                                    *ms = crate::config::OAuthClientKey {
+                                        client_id: oauth.client_id.clone(),
+                                        source: "entered by you".into(),
+                                        ..Default::default()
+                                    };
+                                    changed = true;
+                                }
+                            }
+                            if changed {
+                                self.save_config_now();
+                            }
+                            let adding = self.wizard.as_ref().is_some_and(|w| w.editor.acc.id == account_id);
+                            if self.cfg.account(&account_id).is_none() && !adding {
+                                // Removed or abandoned while the browser was open.
+                                crate::secrets::delete_all(&account_id);
+                            }
+                            if self.cfg.account(&account_id).is_some() {
+                                self.toast("Signed in", ToastKind::Success);
+                                self.engine.send(Command::ResetSignIn { account_id: account_id.clone() });
+                                self.engine.send(Command::SyncAccount { account_id: account_id.clone(), full: false });
+                                // The new sign-in may have added calendar access.
+                                for s in self.cfg.calendar_sources.iter().filter(|s| s.account_id == account_id) {
+                                    self.cal_statuses.remove(&s.id);
+                                    self.engine.send(Command::SyncCalendars { source_id: Some(s.id.clone()) });
+                                }
+                            }
                         }
                         Err(e) => {
-                            self.toast(format!("Sign-in failed: {e}"), ToastKind::Error);
+                            // The wizard and the account editor show the error themselves.
+                            let shown = self.wizard.as_ref().is_some_and(|w| w.editor.acc.id == account_id)
+                                || self.settings.as_ref().and_then(|s| s.account.as_ref()).is_some_and(|ed| ed.acc.id == account_id);
+                            if !shown {
+                                self.toast(format!("Sign-in failed: {e}"), ToastKind::Error);
+                            }
                         }
                     }
                 }

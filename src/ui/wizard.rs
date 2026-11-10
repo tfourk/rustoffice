@@ -3,14 +3,14 @@
 use egui::{vec2, Align, Align2, Color32, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, RichText, Sense, Ui};
 
 use crate::app::{App, ToastKind};
-use crate::config::{AccountConfig, AuthKind, Security, ServerConfig};
+use crate::config::{AccountConfig, AuthKind, OAuthClientKey, OAuthConfig, Security, ServerConfig};
 use crate::engine::autoconfig::Discovered;
 use crate::engine::Command;
 use crate::icons;
 use crate::model::FolderRole;
 use crate::secrets::{self, SecretKind};
 use crate::theme::{font, font_semibold, icon_fill_font, icon_font, mix, pal};
-use crate::ui::settings::{account_form, AccountEditor};
+use crate::ui::settings::{account_form, oauth_section, AccountEditor};
 use crate::ui::widgets;
 use crate::util;
 
@@ -20,6 +20,8 @@ pub enum Step {
     Email,
     Discovering,
     Credentials,
+    /// One-time Google sign-in setup (making an app key in Google Cloud).
+    GoogleSetup,
     Testing,
     Done,
 }
@@ -37,6 +39,11 @@ pub struct WizardState {
     pub smtp: Option<Result<String, String>>,
     pub warning: Option<String>,
     pub start_test_pending: bool,
+    pub google_setup: Option<crate::ui::oauth_setup::GoogleSetup>,
+    /// Looked for a downloaded Google key file already.
+    key_scanned: bool,
+    /// A Google key file found in Downloads, offered with one click.
+    found_key: Option<OAuthClientKey>,
     focus: bool,
 }
 
@@ -68,23 +75,16 @@ impl WizardState {
             email: String::new(),
             name: String::new(),
             found: None,
-            editor: AccountEditor {
-                acc: AccountConfig::default(),
-                password: String::new(),
-                smtp_password: String::new(),
-                has_password: false,
-                testing: false,
-                test: None,
-                oauth_waiting: false,
-                oauth_result: None,
-                show_password: false,
-            },
+            editor: AccountEditor::blank(AccountConfig::default()),
             manual: false,
             error: None,
             imap: None,
             smtp: None,
             warning: None,
             start_test_pending: false,
+            google_setup: None,
+            key_scanned: false,
+            found_key: None,
             focus: true,
         }
     }
@@ -108,8 +108,8 @@ impl WizardState {
                 acc.save_sent_copy = d.save_sent_copy;
                 if let Some(o) = &d.oauth {
                     acc.oauth = o.clone();
-                    // Microsoft no longer accepts passwords for IMAP.
-                    acc.auth = if o.provider == "microsoft" { AuthKind::OAuth2 } else { AuthKind::Password };
+                    // Google and Microsoft accounts sign in with the browser.
+                    acc.auth = AuthKind::OAuth2;
                 }
                 self.manual = d.source.contains("guess");
                 self.found = Some(d);
@@ -135,14 +135,37 @@ impl WizardState {
         }
     }
 
-    pub fn on_oauth(&mut self, account_id: &str, result: Result<(), String>) {
+    pub fn on_oauth_url(&mut self, account_id: &str, url: &str) {
+        if self.editor.acc.id == account_id {
+            self.editor.oauth_url = Some(url.to_string());
+        }
+    }
+
+    pub fn on_oauth(&mut self, account_id: &str, result: &Result<Box<OAuthConfig>, String>) {
         if self.editor.acc.id == account_id {
             self.editor.oauth_waiting = false;
-            self.editor.oauth_result = Some(result.clone());
-            if result.is_ok() && self.step == Step::Credentials {
-                self.start_test_pending = true;
+            if let Ok(oauth) = result {
+                // The account keeps the key its new token belongs to.
+                self.editor.acc.oauth = (**oauth).clone();
+                if self.step == Step::Credentials {
+                    self.start_test_pending = true;
+                }
             }
+            self.editor.oauth_result = Some(result.as_ref().map(|_| ()).map_err(|e| e.clone()));
         }
+    }
+
+    /// Starts over with a fresh account (new id); the old attempt's pending
+    /// sign-in is stopped and its token dropped by the caller.
+    fn reset_account(&mut self) {
+        self.editor = AccountEditor::blank(AccountConfig::default());
+        self.found = None;
+        self.key_scanned = false;
+        self.found_key = None;
+        self.manual = false;
+        self.imap = None;
+        self.smtp = None;
+        self.warning = None;
     }
 }
 
@@ -182,8 +205,20 @@ impl App {
                 }
             }
         }
+        // A Google key downloaded earlier is offered (not taken silently: any
+        // website can drop a file into Downloads).
+        if w.step == Step::Credentials && !w.key_scanned && w.editor.acc.auth == AuthKind::OAuth2 && w.editor.acc.oauth.provider == "google" {
+            w.key_scanned = true;
+            if crate::engine::oauth::key_for_sign_in(&self.cfg.oauth_apps, &w.editor.acc.oauth).is_none() {
+                w.found_key = crate::engine::oauth::find_downloaded_google_key(None);
+            }
+        }
         let resp = modal.show(ctx, |ui| {
-            ui.set_width(if w.step == Step::Credentials && w.manual { 640.0 } else { 520.0 });
+            ui.set_width(match w.step {
+                Step::GoogleSetup => 660.0,
+                Step::Credentials if w.manual => 640.0,
+                _ => 520.0,
+            });
             match w.step {
                 Step::Welcome => {
                     ui.vertical_centered(|ui| {
@@ -229,10 +264,13 @@ impl App {
                         if (widgets::primary_button_ex(ui, None, "Continue", valid).clicked() || (enter && valid)) && valid {
                             w.error = None;
                             w.step = Step::Discovering;
-                            w.editor.acc = AccountConfig::default();
+                            self.abandon_sign_in(&w.editor.acc.id);
+                            w.reset_account();
                             self.engine.send(Command::Discover { email: w.email.trim().to_string() });
                         }
                         if widgets::link(ui, "Set up manually").clicked() {
+                            self.abandon_sign_in(&w.editor.acc.id);
+                            w.reset_account();
                             let email = w.email.trim().to_string();
                             let (i, s) = guess_servers(&email);
                             let acc = &mut w.editor.acc;
@@ -293,12 +331,10 @@ impl App {
                             ui.add_space(8.0);
                         }
                     }
-                    let mut start_oauth = false;
+                    let mut oauth_action = None;
                     if w.manual {
                         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
-                            if account_form(ui, &mut w.editor, false) == Some("oauth") {
-                                start_oauth = true;
-                            }
+                            oauth_action = account_form(ui, &mut w.editor, false, &self.cfg.oauth_apps);
                         });
                     } else {
                         match w.editor.acc.auth {
@@ -315,8 +351,57 @@ impl App {
                                 });
                             }
                             AuthKind::OAuth2 => {
-                                if account_form_oauth_only(ui, &mut w.editor) {
-                                    start_oauth = true;
+                                let has_key = crate::engine::oauth::key_for_sign_in(&self.cfg.oauth_apps, &w.editor.acc.oauth).is_some();
+                                let found = w.found_key.clone().filter(|_| !has_key);
+                                if let Some(found) = &found {
+                                    // One click: use the key file already in Downloads.
+                                    Frame::NONE
+                                        .fill(p.accent_soft)
+                                        .corner_radius(CornerRadius::same(8))
+                                        .inner_margin(Margin::symmetric(14, 12))
+                                        .show(ui, |ui| {
+                                            ui.set_width(ui.available_width());
+                                            ui.horizontal(|ui| {
+                                                ui.label(RichText::new(icons::KEY).font(icon_font(18.0)).color(p.accent_text));
+                                                ui.label(RichText::new("Use the Google key you downloaded?").font(font_semibold(15.0)).color(p.accent_text));
+                                            });
+                                            ui.add_space(2.0);
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "Found in your Downloads folder: {}. Only use it if you made it for RustMail.",
+                                                    crate::ui::oauth_setup::describe(found)
+                                                ))
+                                                .font(font(13.5))
+                                                .color(p.text),
+                                            );
+                                            ui.add_space(10.0);
+                                            ui.horizontal(|ui| {
+                                                if widgets::primary_button(ui, Some(icons::SIGN_IN), "Use this key and sign in").clicked() {
+                                                    oauth_action = Some("use-found-key");
+                                                }
+                                                ui.add_space(8.0);
+                                                if widgets::link(ui, "Make a new key instead").clicked() {
+                                                    oauth_action = Some("google-setup");
+                                                }
+                                            });
+                                        });
+                                }
+                                // Shown for Microsoft from the start, so typing the first
+                                // character of a client ID doesn't move the field (and its focus).
+                                if has_key || w.editor.acc.oauth.provider == "microsoft" {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Sign in with your {} account in the browser. RustMail never sees your password.",
+                                            crate::engine::oauth::provider_name(&w.editor.acc.oauth.provider)
+                                        ))
+                                        .color(p.text2),
+                                    );
+                                    ui.add_space(10.0);
+                                }
+                                if found.is_none() {
+                                    if let Some(a) = oauth_section(ui, &mut w.editor, &self.cfg.oauth_apps) {
+                                        oauth_action = Some(a);
+                                    }
                                 }
                             }
                         }
@@ -325,27 +410,70 @@ impl App {
                             w.manual = true;
                         }
                     }
-                    if start_oauth {
-                        w.editor.oauth_waiting = true;
-                        w.editor.oauth_result = None;
-                        self.engine.send(Command::OAuthSignIn { account: Box::new(w.editor.acc.clone()) });
+                    match oauth_action {
+                        Some("use-found-key") => {
+                            if let Some(key) = w.found_key.take() {
+                                self.save_google_key(key);
+                                self.start_oauth(&mut w.editor);
+                            }
+                        }
+                        Some("oauth") => self.start_oauth(&mut w.editor),
+                        Some("oauth-cancel") => {
+                            w.editor.oauth_waiting = false;
+                            self.engine.send(Command::OAuthCancel { account_id: w.editor.acc.id.clone() });
+                        }
+                        Some("google-setup") => {
+                            w.google_setup = Some(crate::ui::oauth_setup::GoogleSetup::new());
+                            w.step = Step::GoogleSetup;
+                        }
+                        _ => {}
                     }
                     ui.add_space(18.0);
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
                     ui.horizontal(|ui| {
+                        let oauth = w.editor.acc.auth == AuthKind::OAuth2;
                         let ready = match w.editor.acc.auth {
                             AuthKind::Password => !w.editor.password.is_empty(),
                             AuthKind::OAuth2 => matches!(w.editor.oauth_result, Some(Ok(()))),
                         };
-                        if (widgets::primary_button_ex(ui, Some(icons::SIGN_IN), "Sign in", ready).clicked() || (enter && ready && !w.manual)) && ready {
+                        // Browser sign-in checks the connection by itself once it succeeds.
+                        if (!oauth || w.manual)
+                            && (widgets::primary_button_ex(ui, Some(icons::SIGN_IN), "Sign in", ready).clicked() || (enter && ready && !w.manual))
+                            && ready
+                        {
                             self.wizard_start_test(&mut w);
                         }
                         if widgets::secondary_button(ui, None, "Back").clicked() {
+                            if w.editor.oauth_waiting {
+                                w.editor.oauth_waiting = false;
+                                self.engine.send(Command::OAuthCancel { account_id: w.editor.acc.id.clone() });
+                            }
                             w.step = Step::Email;
                             w.error = None;
                             w.found = None;
                         }
                     });
+                }
+                Step::GoogleSetup => {
+                    let setup = w.google_setup.get_or_insert_with(crate::ui::oauth_setup::GoogleSetup::new);
+                    let result = egui::ScrollArea::vertical()
+                        .max_height(ctx.content_rect().height() * 0.8)
+                        .show(ui, |ui| setup.ui(ui))
+                        .inner;
+                    match result {
+                        crate::ui::oauth_setup::SetupResult::Working => {}
+                        crate::ui::oauth_setup::SetupResult::Cancel => {
+                            w.google_setup = None;
+                            w.step = Step::Credentials;
+                        }
+                        crate::ui::oauth_setup::SetupResult::Done(key) => {
+                            w.google_setup = None;
+                            w.step = Step::Credentials;
+                            w.found_key = None;
+                            self.save_google_key(key);
+                            self.start_oauth(&mut w.editor);
+                        }
+                    }
                 }
                 Step::Testing => {
                     ui.vertical_centered(|ui| {
@@ -383,8 +511,11 @@ impl App {
             }
         });
         let dismissable = !(w.first_run && self.cfg.accounts.is_empty());
-        if resp.should_close() && dismissable && !matches!(w.step, Step::Testing | Step::Discovering) {
+        if resp.should_close() && dismissable && !matches!(w.step, Step::Testing | Step::Discovering | Step::GoogleSetup) {
             close = true;
+        }
+        if close && w.step != Step::Done {
+            self.abandon_sign_in(&w.editor.acc.id);
         }
         if close {
             self.cfg.onboarded = true;
@@ -394,6 +525,15 @@ impl App {
         }
         let _ = mix;
         let _ = icon_font;
+    }
+
+    /// Stops a pending browser sign-in for an account that wasn't added and
+    /// drops any token it already stored.
+    fn abandon_sign_in(&mut self, account_id: &str) {
+        self.engine.send(Command::OAuthCancel { account_id: account_id.to_string() });
+        if self.cfg.account(account_id).is_none() {
+            secrets::delete_all(account_id);
+        }
     }
 
     fn wizard_start_test(&mut self, w: &mut WizardState) {
@@ -481,35 +621,4 @@ fn status_line(ui: &mut Ui, label: &str, r: &Option<Result<String, String>>) {
             ui.label(RichText::new(text).font(font(13.0)).color(p.text2));
         }
     });
-}
-
-/// Compact OAuth section for the quick (non-manual) path. Returns true when
-/// the user asked to start the browser sign-in.
-fn account_form_oauth_only(ui: &mut Ui, ed: &mut AccountEditor) -> bool {
-    let p = pal();
-    let mut start = false;
-    ui.label(RichText::new("This provider requires signing in with your browser (OAuth 2.0).").color(p.text2));
-    ui.add_space(6.0);
-    widgets::text_input(ui, &mut ed.acc.oauth.client_id, "OAuth client ID (from your app registration)", ui.available_width());
-    ui.add_space(4.0);
-    widgets::text_input_ex(ui, &mut ed.acc.oauth.client_secret, "Client secret (if your provider issued one)", ui.available_width(), true);
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        if ed.oauth_waiting {
-            widgets::spinner(ui, 16.0);
-            ui.label("Finish signing in in your browser…");
-        } else if widgets::secondary_button_ex(ui, Some(icons::SIGN_IN), "Sign in with browser", !ed.acc.oauth.client_id.trim().is_empty()).clicked() {
-            start = true;
-        }
-        match &ed.oauth_result {
-            Some(Ok(())) => {
-                ui.label(RichText::new(format!("{} Signed in", icons::CHECK_CIRCLE)).font(icon_font(13.0)).color(p.success));
-            }
-            Some(Err(e)) => {
-                ui.label(RichText::new(util::truncate_chars(e, 140)).font(font(12.5)).color(p.danger));
-            }
-            None => {}
-        }
-    });
-    start
 }

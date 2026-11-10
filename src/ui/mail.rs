@@ -428,7 +428,8 @@ impl App {
         let ctx = ui.ctx().clone();
         // Files dropped on the window start a new message with attachments.
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        if !dropped.is_empty() {
+        // Settings and the setup wizard take dropped files themselves (Google key files).
+        if !dropped.is_empty() && self.settings.is_none() && self.wizard.is_none() {
             self.attach_dropped(dropped);
         }
 
