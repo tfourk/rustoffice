@@ -30,6 +30,9 @@ mail-parser = "0.11"
 hickory-resolver = "0.26"
 ureq = "3"
 roxmltree = "0.21"
+rrule = "0.14"
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
 ring = "0.17"
 
 rusqlite = { version = "0.41", features = ["bundled"] }

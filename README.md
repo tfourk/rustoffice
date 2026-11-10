@@ -42,8 +42,11 @@ stored in a private file (mode 0600) in the data folder.
   autoconfig file, Mozilla's ISP database, the domain's MX records (e.g. Google Workspace
   and Microsoft 365 custom domains) and finally probing common host names. Every setting
   can be edited by hand; connections are tested before an account is saved.
-- Password / app-password sign-in, or **OAuth 2.0** (PKCE, browser sign-in) with your
-  own client ID for Google and Microsoft.
+- **Sign in with Google / Microsoft** in the browser (OAuth 2.0 with PKCE); RustMail
+  never sees your password. Google needs a one-time app key: a guided setup opens each
+  Google Cloud page for you and picks up the key file as soon as you download it
+  (see [Google accounts](#google-accounts-gmail-google-workspace)).
+  Other providers use a password or app password.
 - **Focused Inbox** (newsletters and notifications go to *Other*; "Always move to
   Focused/Other" per sender), **conversation view**, pinning, flags, categories,
   snooze, sweep, junk / not junk, block sender, unified "All inboxes".
@@ -137,16 +140,95 @@ username = "jane@example.com"
 ```
 
 Command-line options: `--demo`, `--data-dir DIR`, `--module mail|calendar|people|todo`,
-`--theme light|dark`, `--wizard`, `--settings`, `--help`.
+`--theme light|dark`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
+`--google-setup`, `--help`.
 
-### Provider notes
+### Google accounts (Gmail, Google Workspace)
 
-- **Gmail / Google Workspace**: create an app password (needs 2-Step Verification) or
-  use OAuth with your own Google Cloud "Desktop app" client ID and secret. Turn off
-  "Save a copy of sent messages" (Gmail does it itself — this is the default).
-- **Outlook.com / Microsoft 365**: Microsoft requires OAuth. Register a public client
-  in Azure (redirect URI `http://localhost`) with the `IMAP.AccessAsUser.All` and
-  `SMTP.Send` permissions, then paste its client ID.
+Type your Gmail address and click **Sign in with Google**. Your browser opens, you sign
+in with Google as usual, and RustMail never sees your password.
+
+| | |
+|---|---|
+| ![Sign in with Google](docs/screenshots/google-signin.png) | ![One-time Google setup guide](docs/screenshots/google-setup.png) |
+
+**The one-time setup.** Google only lets an app open Gmail if the app has its own key,
+called a *client ID* (an "OAuth client"). Apps from big companies ship with one;
+RustMail doesn't, because Google requires a costly security review before one key may
+be shared by everyone. So you make a free key for yourself, once per computer. The
+first time you add a Google account, RustMail shows a short guide with a button for
+each page of Google Cloud:
+
+1. **Create a project**: sign in, accept the terms, name it RustMail. Google may ask you
+   to turn on 2-Step Verification first; no payment details are needed.
+2. **Turn on Gmail** and **Google Calendar** for the project (two pages, click Enable on
+   each).
+3. **Describe the app**: Get started → app name RustMail, your e-mail address, audience
+   **External**.
+4. **Let yourself in**: Audience → Test users → Add users → your Gmail address → Save.
+   While the app is in Google's "Testing" mode, Google asks you to sign in again every
+   7 days (RustMail then shows a **Sign in** button). To avoid that you can **publish**
+   the app instead, but Google only allows that once the Branding page has a home page
+   and privacy policy link on a website domain you own.
+5. **Create the key**: Clients → Create client → **Desktop app** → Create, then
+   **Download JSON** right away. Google shows the secret only once.
+
+While the guide is open, RustMail watches your Downloads folder (including the Windows
+one under WSL) and picks up the `client_secret_….json` file the moment it's downloaded;
+you can also choose the file, drop it on the window, or paste the client ID and secret.
+The key is shared by all your Google accounts and shown under **Settings → Accounts →
+Google sign-in**. If a key file from earlier is already in your Downloads folder when you
+add a Google account, RustMail offers it with a **Use this key** button (it never takes
+a file it finds there without asking).
+
+**When you sign in**, Google shows its account chooser, then warns that the app is being
+tested or *hasn't been verified*. That's expected for a key you made yourself: click
+**Continue** (or **Advanced**, then the **Go to … (unsafe)** link) and allow access to
+your mail. A key in testing mode works for the test users you list (up to 100).
+
+**Troubleshooting**
+
+- *Signed out every week*: that's Google's rule for keys in "Testing" mode; click
+  **Sign in** when RustMail asks. Publishing the app (step 4) stops it, but needs a
+  website with a privacy policy.
+- *"Access blocked: … has not completed the Google verification process"*: the Google
+  account isn't on the key's test-user list; add it (step 4).
+- *"Access blocked" or "This app is blocked"* without an Advanced link: accounts in
+  Google's Advanced Protection Program only allow verified apps, and Google Workspace
+  administrators can block apps or IMAP. Ask your administrator to trust the client ID.
+- *"RustMail wasn't given permission to read and send your mail"*: sign in again and
+  allow mail access (tick every box if Google shows any).
+- *The mail server didn't accept the sign-in*: make sure you chose the same Google
+  account in the browser as the address you added.
+- *Google deleted the key*: Google removes keys that haven't been used for 6 months
+  (you get an e-mail first and can restore it within 30 days in Google Cloud → Clients).
+  Otherwise make a new key with **Use a different key** and sign in again.
+- *Lost the key file*: in Google Cloud → Clients, add a new secret (or create a new
+  client) and download it again, then use **Settings → Accounts → Use a different key**.
+- If no browser opens (remote or headless sessions), use **Copy the sign-in link** while
+  RustMail is waiting. `RUSTMAIL_NO_BROWSER=1` turns the automatic browser off.
+
+**A copy with the key built in.** If you build RustMail for family or friends, put your
+key into the build and nobody has to do the setup:
+
+```bash
+RUSTMAIL_GOOGLE_CLIENT_ID=….apps.googleusercontent.com \
+RUSTMAIL_GOOGLE_CLIENT_SECRET=GOCSPX-… cargo build --release
+```
+
+Don't commit the key to a public repository (Google's terms forbid publishing it), and
+remember the 100-person limit for unverified keys.
+
+### Other providers
+
+- **Outlook.com / Microsoft 365**: Microsoft requires browser sign-in (OAuth) for mail
+  apps, using an app registration from Microsoft Entra (a public "Mobile and desktop"
+  client with redirect `http://localhost`, delegated permissions `IMAP.AccessAsUser.All`,
+  `SMTP.Send` and `offline_access`). Since June 2024 a personal Microsoft account alone
+  can't create registrations; you need a (free) Azure tenant. Whoever builds RustMail can
+  register once and build with `RUSTMAIL_MICROSOFT_CLIENT_ID=…`; otherwise paste the
+  Application (client) ID when adding the account. Microsoft 365 organizations often
+  require an administrator to approve the app first.
 - **iCloud, Yahoo, AOL, Fastmail**: use an app-specific password.
 - **Proton Mail**: run Proton Mail Bridge; the preset points at it and accepts the
   Bridge's self-signed certificate.
@@ -163,12 +245,18 @@ End-to-end tests run the real sync engine against a local IMAP + SMTP server:
 python3 -m venv .venv && .venv/bin/pip install twisted aiosmtpd
 .venv/bin/python tools/testserver.py &          # IMAP :1143, SMTP :2525
 cargo test -- --ignored live_imap --nocapture   # restart the server between runs
+cargo test -- --ignored live_oauth --nocapture  # browser sign-in against a fake Google
 cargo test -- --ignored live_discover --nocapture   # auto-discovery (uses the network)
 ```
 
 The live test covers sign-in, folder discovery, initial sync, body download, flag and
 move round-trips (verified on the server), sending with a Sent copy, drafts, folder
-create/rename/delete, delete and empty trash, and push delivery via IDLE.
+create/rename/delete, delete and empty trash, and push delivery via IDLE. The OAuth
+test plays the browser against a fake Google token endpoint: consent and code exchange,
+XOAUTH2 for IMAP and SMTP (the test server accepts the token `live-access-token` and
+answers bad tokens like Gmail does), sync and sending, the wrong Google account,
+cancelling, rejected tokens and expired sign-ins. Unit tests never touch your real
+keychain.
 
 Set `RUSTMAIL_SCREENSHOT=out.png` to make the app save a screenshot of its window after
 start-up and exit (useful for visual checks in CI).

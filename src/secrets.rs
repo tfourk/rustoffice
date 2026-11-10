@@ -16,6 +16,8 @@ pub enum SecretKind {
     Password,
     SmtpPassword,
     OAuthRefresh,
+    /// Password of a CalDAV calendar source (keyed by the source id).
+    CalDavPassword,
 }
 
 impl SecretKind {
@@ -24,6 +26,7 @@ impl SecretKind {
             SecretKind::Password => "password",
             SecretKind::SmtpPassword => "smtp-password",
             SecretKind::OAuthRefresh => "oauth-refresh",
+            SecretKind::CalDavPassword => "caldav-password",
         }
     }
 }
@@ -73,6 +76,9 @@ pub fn get(account_id: &str, kind: SecretKind) -> Option<String> {
     if let Some(v) = cache_get(&k) {
         return Some(v);
     }
+    if cfg!(test) {
+        return None;
+    }
     let from_keyring = keyring::Entry::new(SERVICE, &k)
         .ok()
         .and_then(|e| e.get_password().ok());
@@ -86,6 +92,10 @@ pub fn get(account_id: &str, kind: SecretKind) -> Option<String> {
 pub fn set(account_id: &str, kind: SecretKind, value: &str) {
     let k = key(account_id, kind);
     cache_put(&k, Some(value));
+    // Tests never touch the real keychain.
+    if cfg!(test) {
+        return;
+    }
     let stored = keyring::Entry::new(SERVICE, &k)
         .ok()
         .map(|e| e.set_password(value).is_ok())
@@ -104,6 +114,9 @@ pub fn set(account_id: &str, kind: SecretKind, value: &str) {
 pub fn delete(account_id: &str, kind: SecretKind) {
     let k = key(account_id, kind);
     cache_put(&k, None);
+    if cfg!(test) {
+        return;
+    }
     if let Ok(e) = keyring::Entry::new(SERVICE, &k) {
         let _ = e.delete_credential();
     }

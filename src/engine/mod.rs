@@ -6,6 +6,7 @@
 pub mod autoconfig;
 pub mod imap;
 pub mod net;
+pub mod calsync;
 pub mod oauth;
 pub mod rules;
 pub mod smtp;
@@ -84,6 +85,14 @@ pub enum Command {
     TestAccount { account: Box<AccountConfig>, password: String, smtp_password: String },
     Discover { email: String },
     OAuthSignIn { account: Box<AccountConfig> },
+    /// Stops waiting for the browser sign-in of this account.
+    OAuthCancel { account_id: String },
+    /// The account signed in again: forget the cached access token.
+    ResetSignIn { account_id: String },
+    /// Sync one calendar source now (all when `None`).
+    SyncCalendars { source_id: Option<String> },
+    /// Checks a CalDAV server before the source is added.
+    TestCalDav { source: Box<crate::config::CalendarSource>, password: String },
     Shutdown,
 }
 
@@ -101,7 +110,15 @@ pub enum Event {
     DraftSaved,
     TestResult { imap: Result<String, String>, smtp: Result<String, String> },
     Discovered { email: String, result: Result<autoconfig::Discovered, String> },
-    OAuthResult { account_id: String, result: Result<(), String> },
+    /// The browser sign-in page, so the UI can offer it if no browser opened.
+    OAuthUrl { account_id: String, url: String },
+    /// On success, carries the OAuth settings (including the app key) the new
+    /// refresh token belongs to; the account must keep exactly these.
+    OAuthResult { account_id: String, result: Result<Box<crate::config::OAuthConfig>, String> },
+    CalendarStatus { source_id: String, status: calsync::SourceStatus },
+    /// Synced calendars or events changed in the database.
+    CalendarsChanged,
+    CalDavTestResult { result: Result<Vec<calsync::RemoteCalendar>, String> },
     Toast { text: String, error: bool },
 }
 
@@ -118,7 +135,7 @@ impl Notifier {
     }
 }
 
-struct Shared {
+pub(crate) struct Shared {
     db_path: PathBuf,
     notify: Notifier,
     config: RwLock<AppConfig>,
@@ -200,6 +217,7 @@ enum ACmd {
     SaveDraft { raw: Vec<u8>, replace: Option<MsgRef> },
     Send(i64),
     Reconfigure(Box<AccountConfig>),
+    ResetSignIn,
     Stop,
 }
 
@@ -217,9 +235,12 @@ async fn main_loop(mut rx: UnboundedReceiver<Command>, sh: Arc<Shared>) {
     let _ = store.outbox_reset_sending();
     let mut actors: HashMap<String, (UnboundedSender<ACmd>, AccountConfig)> = HashMap::new();
     let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let mut sign_ins: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
     for acc in sh.cfg().accounts.into_iter().filter(|a| a.enabled) {
         tasks.push(spawn_actor(acc, &sh, &mut actors));
     }
+    let (cal_tx, cal_rx) = unbounded_channel();
+    tasks.push(tokio::spawn(calsync::run(sh.clone(), cal_rx)));
     let mut tick = tokio::time::interval(Duration::from_secs(2));
     loop {
         tokio::select! {
@@ -342,24 +363,67 @@ async fn main_loop(mut rx: UnboundedReceiver<Command>, sh: Arc<Shared>) {
                     }
                     Command::OAuthSignIn { account } => {
                         let n = sh.notify.clone();
-                        tokio::spawn(async move {
-                            let result = oauth::authorize(&account.oauth, &account.email).await;
-                            let result = match result {
-                                Ok(t) => {
-                                    if let Some(r) = t.refresh {
+                        let id = account.id.clone();
+                        if let Some(old) = sign_ins.remove(&id) {
+                            old.abort();
+                        }
+                        let task = tokio::spawn(async move {
+                            match oauth_sign_in(&account, &n).await {
+                                // Storing the token and reporting which key it belongs to
+                                // run in a task of their own, so Cancel can't separate them.
+                                Ok((refresh, granted)) => {
+                                    let mut account = account;
+                                    account.oauth.granted = granted;
+                                    tokio::spawn(async move {
                                         let id = account.id.clone();
-                                        let _ = tokio::task::spawn_blocking(move || {
-                                            secrets::set(&id, SecretKind::OAuthRefresh, &r)
+                                        let stored = tokio::task::spawn_blocking(move || {
+                                            secrets::set(&id, SecretKind::OAuthRefresh, &refresh)
                                         })
                                         .await;
-                                        Ok(())
-                                    } else {
-                                        Err("The provider did not return a refresh token".to_string())
-                                    }
+                                        let result = match stored {
+                                            Ok(()) => Ok(Box::new(account.oauth.clone())),
+                                            Err(e) => Err(format!("Could not save the sign-in: {e}")),
+                                        };
+                                        n.emit(Event::OAuthResult { account_id: account.id.clone(), result });
+                                    });
                                 }
-                                Err(e) => Err(format!("{e:#}")),
+                                Err(e) => n.emit(Event::OAuthResult { account_id: account.id.clone(), result: Err(format!("{e:#}")) }),
+                            }
+                        });
+                        sign_ins.retain(|_, h| !h.is_finished());
+                        sign_ins.insert(id, task.abort_handle());
+                    }
+                    Command::OAuthCancel { account_id } => {
+                        if let Some(h) = sign_ins.remove(&account_id) {
+                            h.abort();
+                        }
+                    }
+                    Command::ResetSignIn { account_id } => to_account(&actors, &account_id, ACmd::ResetSignIn),
+                    Command::SyncCalendars { source_id } => {
+                        let _ = cal_tx.send(calsync::CalCmd::Sync(source_id));
+                    }
+                    Command::TestCalDav { source, password } => {
+                        let n = sh.notify.clone();
+                        let accounts = sh.cfg().accounts;
+                        tokio::task::spawn_blocking(move || {
+                            let account = accounts.iter().find(|a| a.id == source.account_id);
+                            let creds = if password.is_empty() {
+                                calsync::caldav_credentials(&source, account)
+                            } else {
+                                let username = if source.username.trim().is_empty() {
+                                    account.map(|a| a.email.clone()).unwrap_or_default()
+                                } else {
+                                    source.username.trim().to_string()
+                                };
+                                Ok(calsync::caldav::Credentials { username, password })
                             };
-                            n.emit(Event::OAuthResult { account_id: account.id.clone(), result });
+                            let result = creds
+                                .and_then(|c| calsync::caldav::discover(&source.url, &c))
+                                .map_err(|e| match calsync::SourceStatus::from(e) {
+                                    calsync::SourceStatus::AuthFailed(m) | calsync::SourceStatus::Error(m) => m,
+                                    other => format!("{other:?}"),
+                                });
+                            n.emit(Event::CalDavTestResult { result });
                         });
                     }
                 }
@@ -371,6 +435,7 @@ async fn main_loop(mut rx: UnboundedReceiver<Command>, sh: Arc<Shared>) {
     for (_, (tx, _)) in actors {
         let _ = tx.send(ACmd::Stop);
     }
+    let _ = cal_tx.send(calsync::CalCmd::Stop);
     let _ = tokio::time::timeout(Duration::from_secs(8), futures::future::join_all(tasks)).await;
 }
 
@@ -479,7 +544,7 @@ async fn resolve_credentials_with_expiry(
             let id = acc.id.clone();
             let refresh = tokio::task::spawn_blocking(move || secrets::get(&id, SecretKind::OAuthRefresh))
                 .await?
-                .ok_or_else(|| anyhow!("Please sign in to {} with your browser first.", acc.email))?;
+                .ok_or_else(|| anyhow!("RustMail isn't signed in to {} yet. {}", acc.email, oauth::SIGN_IN_AGAIN))?;
             let t = oauth::refresh(&acc.oauth, &refresh).await?;
             if let Some(new_refresh) = t.refresh.clone().filter(|r| *r != refresh) {
                 // Providers may rotate refresh tokens.
@@ -499,6 +564,26 @@ async fn resolve_credentials_with_expiry(
             ))
         }
     }
+}
+
+/// Browser sign-in for `acc`; returns the new refresh token and the
+/// permissions granted.
+async fn oauth_sign_in(acc: &AccountConfig, n: &Notifier) -> Result<(String, String)> {
+    let account_id = acc.id.clone();
+    let tokens = oauth::authorize(&acc.oauth, &acc.email, |url| {
+        n.emit(Event::OAuthUrl { account_id: account_id.clone(), url: url.to_string() });
+        // RUSTMAIL_NO_BROWSER: show the link only (tests, remote sessions).
+        if std::env::var_os("RUSTMAIL_NO_BROWSER").is_some() {
+            log::info!("sign-in link: {url}");
+        } else if let Err(e) = open::that_detached(url) {
+            log::warn!("could not open the browser: {e}");
+        }
+    })
+    .await?;
+    let refresh = tokens
+        .refresh
+        .ok_or_else(|| anyhow!("{} did not return a long-term sign-in token. Please try again.", oauth::provider_name(&acc.oauth.provider)))?;
+    Ok((refresh, tokens.granted.unwrap_or_default()))
 }
 
 async fn test_account(
@@ -689,6 +774,13 @@ impl Worker {
                     next_sync = Instant::now() + self.interval();
                     idle_failures = 0;
                 }
+                Some(Some(ACmd::ResetSignIn)) => {
+                    if let Some(c) = self.conn.take() {
+                        c.logout().await;
+                    }
+                    self.token = None;
+                    next_sync = Instant::now();
+                }
                 Some(Some(ACmd::Reconfigure(acc))) => {
                     let server_changed = acc.imap != self.acc.imap || acc.auth != self.acc.auth || acc.oauth != self.acc.oauth;
                     self.acc = *acc;
@@ -736,7 +828,14 @@ impl Worker {
         if self.conn.is_none() {
             self.status(SyncStatus::Connecting);
             let creds = self.credentials(false).await?;
-            let c = imap::connect(&self.acc.imap, &creds).await?;
+            let c = match imap::connect(&self.acc.imap, &creds).await {
+                Ok(c) => c,
+                Err(e) => {
+                    // A rejected token must not be reused on the next attempt.
+                    self.token = None;
+                    return Err(e);
+                }
+            };
             self.conn = Some(c);
         }
         Ok(())
@@ -1240,7 +1339,7 @@ impl Worker {
 
     async fn handle(&mut self, cmd: ACmd) {
         match cmd {
-            ACmd::Sync { .. } | ACmd::Reconfigure(_) | ACmd::Stop => {}
+            ACmd::Sync { .. } | ACmd::Reconfigure(_) | ACmd::ResetSignIn | ACmd::Stop => {}
             ACmd::SyncFolder(fid) => {
                 if let Ok(Some(f)) = self.store.folder(fid) {
                     self.status(SyncStatus::Syncing(format!("Syncing {}…", f.label())));
@@ -1555,6 +1654,9 @@ impl Worker {
             smtp::send(&self.acc.smtp, &creds, &item.from, &item.recipients, &item.raw).await
         }
         .await;
+        if result.as_ref().is_err_and(|e| e.to_string().contains(oauth::SIGN_IN_AGAIN)) {
+            self.token = None;
+        }
         match result {
             Ok(()) => {
                 let _ = self.store.remove_outbox(outbox_id);
@@ -1771,6 +1873,19 @@ mod live_tests {
             }
         }
         panic!("timed out waiting for {what}; saw: {seen:#?}");
+    }
+
+    /// Like `wait_for`, but sync errors are expected and skipped.
+    fn wait_for_any(rx: &crossbeam_channel::Receiver<Event>, secs: u64, what: &str, mut pred: impl FnMut(&Event) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if let Ok(ev) = rx.recv_timeout(Duration::from_millis(100)) {
+                if pred(&ev) {
+                    return;
+                }
+            }
+        }
+        panic!("timed out waiting for {what}");
     }
 
     fn poll(secs: u64, what: &str, mut cond: impl FnMut() -> bool) {
@@ -2020,5 +2135,261 @@ mod live_tests {
                 ..Default::default()
             }
         }
+    }
+    /// Fake Google token endpoint for the browser sign-in test.
+    struct FakeGoogle {
+        url: String,
+        /// Next answer to a refresh request: an access token, or an OAuth error code.
+        refresh_answer: std::sync::Arc<std::sync::Mutex<Result<String, String>>>,
+        /// Permissions reported as granted by the next code exchange.
+        granted: std::sync::Arc<std::sync::Mutex<String>>,
+    }
+
+    fn fake_google() -> FakeGoogle {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}/token", listener.local_addr().unwrap().port());
+        let refresh_answer = std::sync::Arc::new(std::sync::Mutex::new(Ok("live-access-token".to_string())));
+        let granted = std::sync::Arc::new(std::sync::Mutex::new("https://mail.google.com/".to_string()));
+        let (ra, scope) = (refresh_answer.clone(), granted.clone());
+        std::thread::spawn(move || {
+            for sock in listener.incoming().flatten() {
+                let mut sock = sock;
+                let mut req = Vec::new();
+                let mut buf = [0u8; 4096];
+                let body = loop {
+                    let n = sock.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break String::new();
+                    }
+                    req.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&req).to_string();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse().unwrap_or(0)))
+                            .unwrap_or(0usize);
+                        if body.len() >= len {
+                            break body.to_string();
+                        }
+                    }
+                };
+                assert!(body.contains("client_id=test-client.apps.googleusercontent.com"), "client id sent: {body}");
+                assert!(body.contains("client_secret=GOCSPX-test"), "client secret sent: {body}");
+                let (status, json) = if body.contains("grant_type=authorization_code") {
+                    assert!(body.contains("code=live-code") && body.contains("code_verifier="), "{body}");
+                    ("200 OK", format!(
+                        r#"{{"access_token":"live-access-token","refresh_token":"rt-live","expires_in":3599,"scope":"{}"}}"#,
+                        scope.lock().unwrap()
+                    ))
+                } else {
+                    assert!(body.contains("grant_type=refresh_token") && body.contains("refresh_token=rt-live"), "{body}");
+                    match ra.lock().unwrap().clone() {
+                        Ok(token) => ("200 OK", format!(r#"{{"access_token":"{token}","expires_in":3599}}"#)),
+                        Err(code) => ("400 Bad Request", format!(r#"{{"error":"{code}","error_description":"Token has been expired or revoked."}}"#)),
+                    }
+                };
+                let resp = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}", json.len());
+                let _ = sock.write_all(resp.as_bytes());
+            }
+        });
+        FakeGoogle { url, refresh_answer, granted }
+    }
+
+    /// Plays the browser: follows the consent URL straight back to RustMail.
+    fn approve_in_browser(rx: &crossbeam_channel::Receiver<Event>) {
+        let mut url = String::new();
+        wait_for_any(rx, 10, "sign-in link", |e| match e {
+            Event::OAuthUrl { url: u, .. } => {
+                url = u.clone();
+                true
+            }
+            _ => false,
+        });
+        let q: Vec<(String, String)> = url
+            .split_once('?')
+            .unwrap()
+            .1
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let get = |k: &str| q.iter().find(|(pk, _)| pk == k).map(|(_, v)| v.clone()).unwrap();
+        let decode = |s: String| s.replace("%3A", ":").replace("%2F", "/");
+        let redirect = decode(get("redirect_uri"));
+        let page = ureq::get(&format!("{redirect}/?state={}&code=live-code", get("state")))
+            .call()
+            .unwrap()
+            .body_mut()
+            .read_to_string()
+            .unwrap();
+        assert!(page.contains("signed in"), "{page}");
+    }
+
+    fn oauth_result(rx: &crossbeam_channel::Receiver<Event>) -> Result<(), String> {
+        let mut out = None;
+        wait_for_any(rx, 15, "sign-in result", |e| match e {
+            Event::OAuthResult { result, .. } => {
+                out = Some(result.as_ref().map(|oauth| assert_eq!(oauth.client_id, "test-client.apps.googleusercontent.com")).map_err(|e| e.clone()));
+                true
+            }
+            _ => false,
+        });
+        out.unwrap()
+    }
+
+    fn test_result(rx: &crossbeam_channel::Receiver<Event>) -> (Result<String, String>, Result<String, String>) {
+        let mut out = None;
+        wait_for(rx, 30, "test result", |e| match e {
+            Event::TestResult { imap, smtp } => {
+                out = Some((imap.clone(), smtp.clone()));
+                true
+            }
+            _ => false,
+        });
+        out.unwrap()
+    }
+
+    /// Browser sign-in (Google style) end to end: consent, code exchange,
+    /// XOAUTH2 for IMAP and SMTP, sync, sending, and every failure the
+    /// person can run into.
+    #[test]
+    #[ignore = "needs the local test server (tools/testserver.py)"]
+    fn live_oauth_roundtrip() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        std::env::set_var("RUSTMAIL_NO_BROWSER", "1");
+        let dir = std::env::temp_dir().join(format!("rustmail-live-oauth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("mail.db");
+        let google = fake_google();
+
+        let mut acc = AccountConfig::default();
+        acc.email = "alex@example.test".into();
+        acc.display_name = "Alex Test".into();
+        acc.label = "Google test".into();
+        acc.auth = AuthKind::OAuth2;
+        acc.oauth = oauth::preset("google").unwrap();
+        acc.oauth.auth_url = "http://127.0.0.1:9/auth".into();
+        acc.oauth.token_url = google.url.clone();
+        let key = crate::config::OAuthClientKey {
+            client_id: "test-client.apps.googleusercontent.com".into(),
+            client_secret: "GOCSPX-test".into(),
+            ..Default::default()
+        };
+        oauth::apply_key(&mut acc.oauth, &key);
+        for (server, port) in [(&mut acc.imap, 1143), (&mut acc.smtp, 2525)] {
+            *server = ServerConfig {
+                host: "127.0.0.1".into(),
+                port,
+                security: Security::None,
+                username: "alex@example.test".into(),
+                accept_invalid_certs: false,
+            };
+        }
+        acc.sync_interval_min = 60;
+        let engine = Engine::start(egui::Context::default(), db.clone(), AppConfig::default());
+        let rx = engine.rx.clone();
+
+        // 1. Not signed in yet: a clear "sign in" message, no password prompt.
+        engine.send(Command::TestAccount { account: Box::new(acc.clone()), password: String::new(), smtp_password: String::new() });
+        let (imap, _) = test_result(&rx);
+        assert!(imap.as_ref().unwrap_err().contains(oauth::SIGN_IN_AGAIN), "{imap:?}");
+
+        // 2. Mail permission left unticked at Google: refused, nothing stored.
+        *google.granted.lock().unwrap() = "openid".into();
+        engine.send(Command::OAuthSignIn { account: Box::new(acc.clone()) });
+        approve_in_browser(&rx);
+        let r = oauth_result(&rx);
+        assert!(r.as_ref().unwrap_err().contains("permission to read and send your mail"), "{r:?}");
+        assert!(secrets::get(&acc.id, SecretKind::OAuthRefresh).is_none());
+
+        // 3. Cancelling stops the wait (no result arrives, a new attempt works).
+        engine.send(Command::OAuthSignIn { account: Box::new(acc.clone()) });
+        wait_for(&rx, 10, "sign-in link", |e| matches!(e, Event::OAuthUrl { .. }));
+        engine.send(Command::OAuthCancel { account_id: acc.id.clone() });
+
+        // 4. The real sign-in.
+        *google.granted.lock().unwrap() = "https://mail.google.com/".into();
+        engine.send(Command::OAuthSignIn { account: Box::new(acc.clone()) });
+        approve_in_browser(&rx);
+        assert_eq!(oauth_result(&rx), Ok(()));
+        assert_eq!(secrets::get(&acc.id, SecretKind::OAuthRefresh).as_deref(), Some("rt-live"));
+
+        // 5. IMAP and SMTP accept the token.
+        engine.send(Command::TestAccount { account: Box::new(acc.clone()), password: String::new(), smtp_password: String::new() });
+        let (imap, smtp) = test_result(&rx);
+        assert!(imap.is_ok(), "imap with XOAUTH2: {imap:?}");
+        assert!(smtp.is_ok(), "smtp with XOAUTH2: {smtp:?}");
+
+        // 6. Sync and send as a configured account.
+        let mut cfg = AppConfig::default();
+        cfg.accounts.push(acc.clone());
+        engine.send(Command::ConfigChanged(Box::new(cfg)));
+        wait_for(&rx, 30, "initial sync", idle);
+        let store = Store::open(&db).unwrap();
+        let inbox = folder(&store, &acc.id, FolderRole::Inbox);
+        assert!(!store.list_messages(&ListQueryAll::inbox(inbox.id)).unwrap().is_empty());
+        let subject = format!("OAuth send {}", std::process::id());
+        let raw = format!(
+            "From: Alex Test <alex@example.test>\r\nTo: alex@example.test\r\nSubject: {subject}\r\nMessage-ID: <oauth-{}@example.test>\r\n\r\nSent with a token.\r\n",
+            std::process::id()
+        );
+        store
+            .add_outbox(&OutboxItem {
+                id: 0,
+                account_id: acc.id.clone(),
+                raw: raw.into_bytes(),
+                from: acc.email.clone(),
+                recipients: vec!["alex@example.test".to_string()],
+                send_at: 0,
+                attempts: 0,
+                last_error: None,
+                subject: subject.clone(),
+                reply_to_msg: None,
+                forward_of: None,
+                draft_msg: None,
+            })
+            .unwrap();
+        engine.send(Command::ProcessOutbox);
+        wait_for(&rx, 30, "sent", |e| matches!(e, Event::Sent { .. }) || matches!(e, Event::SendFailed { .. }) && panic!("{e:?}"));
+
+        // 7. A token the server rejects: the XOAUTH2 error challenge is
+        //    answered properly (no hang) and both directions ask to sign in.
+        *google.refresh_answer.lock().unwrap() = Ok("stale-token".into());
+        engine.send(Command::TestAccount { account: Box::new(acc.clone()), password: String::new(), smtp_password: String::new() });
+        let (imap, smtp) = test_result(&rx);
+        assert!(imap.as_ref().unwrap_err().contains(oauth::SIGN_IN_AGAIN), "{imap:?}");
+        assert!(smtp.as_ref().unwrap_err().contains(oauth::SIGN_IN_AGAIN), "{smtp:?}");
+
+        // 8. Revoked / expired sign-in (Google says invalid_grant).
+        *google.refresh_answer.lock().unwrap() = Err("invalid_grant".into());
+        engine.send(Command::TestAccount { account: Box::new(acc.clone()), password: String::new(), smtp_password: String::new() });
+        let (imap, _) = test_result(&rx);
+        let e = imap.unwrap_err();
+        assert!(e.contains("expired or was revoked") && e.contains(oauth::SIGN_IN_AGAIN), "{e}");
+
+        // 9. The added account's token gets rejected; signing in again fixes
+        //    it at once (the worker must not keep the rejected token).
+        *google.refresh_answer.lock().unwrap() = Ok("stale-token".into());
+        engine.send(Command::ResetSignIn { account_id: acc.id.clone() });
+        let mut error = String::new();
+        wait_for_any(&rx, 30, "rejected token", |e| match e {
+            Event::Status { status: SyncStatus::Error(msg), .. } => {
+                error = msg.clone();
+                true
+            }
+            _ => false,
+        });
+        assert!(error.contains(oauth::SIGN_IN_AGAIN), "{error}");
+        *google.refresh_answer.lock().unwrap() = Ok("live-access-token".into());
+        engine.send(Command::OAuthSignIn { account: Box::new(acc.clone()) });
+        approve_in_browser(&rx);
+        assert_eq!(oauth_result(&rx), Ok(()));
+        // What the app does after a successful sign-in:
+        engine.send(Command::ResetSignIn { account_id: acc.id.clone() });
+        engine.send(Command::SyncAccount { account_id: acc.id.clone(), full: false });
+        wait_for_any(&rx, 30, "sync after signing in again", idle);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

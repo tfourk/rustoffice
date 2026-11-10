@@ -36,11 +36,17 @@ pub struct ImapConn {
 struct XOAuth2 {
     user: String,
     token: String,
+    sent: bool,
 }
 
 impl Authenticator for XOAuth2 {
     type Response = String;
     fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        // A second challenge carries the server's error details; SASL wants an
+        // empty reply to it, after which the server sends the final NO.
+        if std::mem::replace(&mut self.sent, true) {
+            return String::new();
+        }
         format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
     }
 }
@@ -56,15 +62,29 @@ where
     Ok(())
 }
 
-fn login_error(e: async_imap::error::Error) -> anyhow::Error {
+fn login_error(e: async_imap::error::Error, oauth: bool) -> anyhow::Error {
     let msg = e.to_string();
     let lower = msg.to_lowercase();
-    if lower.contains("authenticationfailed")
+    // A real rejection of the credentials. Other NO replies (server busy, too
+    // many connections) aren't fixed by a new password or sign-in.
+    // Gmail: "[AUTHENTICATIONFAILED] Invalid credentials"; Outlook / Microsoft 365:
+    // "AUTHENTICATE failed.".
+    let rejected = lower.contains("authenticationfailed")
         || lower.contains("invalid credentials")
         || lower.contains("authentication failed")
-        || lower.contains("login failed")
-        || lower.starts_with("no response")
-    {
+        || lower.contains("authenticate failed");
+    if oauth {
+        return if rejected {
+            anyhow!(
+                "The mail server didn't accept the browser sign-in. Make sure you chose this account in the browser and \
+                 allowed RustMail to read and send mail (and that IMAP isn't turned off for it). {} Details: {msg}",
+                super::oauth::SIGN_IN_AGAIN
+            )
+        } else {
+            anyhow!("Sign-in failed: {msg}")
+        };
+    }
+    if rejected || lower.contains("login failed") || lower.starts_with("no response") {
         anyhow!(
             "Sign-in was rejected by the server. Check your user name and password \
              (some providers require an app password). Details: {msg}"
@@ -105,15 +125,16 @@ pub async fn connect(server: &ServerConfig, creds: &Credentials) -> Result<ImapC
                     XOAuth2 {
                         user: creds.username.clone(),
                         token: creds.secret.clone(),
+                        sent: false,
                     },
                 )
                 .await
-                .map_err(|(e, _)| login_error(e))
+                .map_err(|(e, _)| login_error(e, true))
         } else {
             client
                 .login(&creds.username, &creds.secret)
                 .await
-                .map_err(|(e, _)| login_error(e))
+                .map_err(|(e, _)| login_error(e, false))
         }
     };
     let mut session = tokio::time::timeout(net::CONNECT_TIMEOUT * 2, login)

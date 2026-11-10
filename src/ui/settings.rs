@@ -85,13 +85,41 @@ pub struct AccountEditor {
     pub test: Option<(Result<String, String>, Result<String, String>)>,
     pub oauth_waiting: bool,
     pub oauth_result: Option<Result<(), String>>,
+    /// The browser sign-in page, offered for copying if no browser opened.
+    pub oauth_url: Option<String>,
+    pub link_copied: bool,
+    pub has_oauth_token: bool,
+    /// The remembered Microsoft client ID was offered once already.
+    pub ms_prefilled: bool,
     pub show_password: bool,
 }
 
 impl AccountEditor {
+    pub fn blank(acc: AccountConfig) -> Self {
+        AccountEditor {
+            acc,
+            password: String::new(),
+            smtp_password: String::new(),
+            has_password: false,
+            testing: false,
+            test: None,
+            oauth_waiting: false,
+            oauth_result: None,
+            oauth_url: None,
+            link_copied: false,
+            has_oauth_token: false,
+            ms_prefilled: false,
+            show_password: false,
+        }
+    }
+
     fn new(acc: &AccountConfig) -> Self {
         AccountEditor {
             has_password: secrets::get(&acc.id, SecretKind::Password).is_some(),
+            has_oauth_token: acc.auth == AuthKind::OAuth2 && secrets::get(&acc.id, SecretKind::OAuthRefresh).is_some(),
+            oauth_url: None,
+            link_copied: false,
+            ms_prefilled: false,
             acc: acc.clone(),
             password: String::new(),
             smtp_password: String::new(),
@@ -111,6 +139,9 @@ pub struct SettingsState {
     pub new_safe: String,
     pub new_blocked: String,
     pub new_category: String,
+    pub google_setup: Option<crate::ui::oauth_setup::GoogleSetup>,
+    /// Start the browser sign-in once Google setup is finished.
+    pub sign_in_after_setup: bool,
 }
 
 impl Default for SettingsState {
@@ -122,6 +153,8 @@ impl Default for SettingsState {
             new_safe: String::new(),
             new_blocked: String::new(),
             new_category: String::new(),
+            google_setup: None,
+            sign_in_after_setup: false,
         }
     }
 }
@@ -151,14 +184,130 @@ impl SettingsState {
             }
         }
     }
-    pub fn on_oauth(&mut self, account_id: &str, result: Result<(), String>) {
+    pub fn on_oauth(&mut self, account_id: &str, result: &Result<Box<OAuthConfig>, String>) {
         if let Some(a) = self.account.as_mut() {
             if a.acc.id == account_id {
                 a.oauth_waiting = false;
-                a.oauth_result = Some(result);
+                if let Ok(oauth) = result {
+                    // Keep the key the new token belongs to, so Save can't undo it.
+                    a.acc.oauth = (**oauth).clone();
+                    a.acc.auth = AuthKind::OAuth2;
+                    a.has_oauth_token = true;
+                }
+                a.oauth_result = Some(result.as_ref().map(|_| ()).map_err(|e| e.clone()));
             }
         }
     }
+
+    pub fn on_oauth_url(&mut self, account_id: &str, url: &str) {
+        if let Some(a) = self.account.as_mut().filter(|a| a.acc.id == account_id) {
+            a.oauth_url = Some(url.to_string());
+        }
+    }
+}
+
+/// Browser sign-in controls for an OAuth account. Returns `"oauth"` to start
+/// signing in, `"oauth-cancel"` or `"google-setup"`.
+pub fn oauth_section(ui: &mut Ui, ed: &mut AccountEditor, apps: &OAuthApps) -> Option<&'static str> {
+    let p = pal();
+    let mut action = None;
+    let provider = ed.acc.oauth.provider.clone();
+    let name = crate::engine::oauth::provider_name(&provider);
+    let key = crate::engine::oauth::key_for_sign_in(apps, &ed.acc.oauth);
+    if provider == "google" && key.is_none() {
+        Frame::NONE
+            .fill(p.accent_soft)
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(icons::KEY).font(icon_font(18.0)).color(p.accent_text));
+                    ui.label(RichText::new("One-time setup needed").font(font_semibold(15.0)).color(p.accent_text));
+                });
+                ui.add_space(2.0);
+                ui.label(
+                    RichText::new("Google asks every mail app for its own key. RustMail walks you through making yours: about 5 minutes, and only once on this computer.")
+                        .font(font(13.5))
+                        .color(p.text),
+                );
+                ui.add_space(10.0);
+                if widgets::primary_button(ui, Some(icons::KEY), "Set up Google sign-in").clicked() {
+                    action = Some("google-setup");
+                }
+            });
+        return action;
+    }
+    if provider == "microsoft" && crate::engine::oauth::builtin_key("microsoft").is_none() {
+        if !ed.ms_prefilled {
+            ed.ms_prefilled = true;
+            if ed.acc.oauth.client_id.trim().is_empty() && apps.microsoft.is_set() {
+                ed.acc.oauth.client_id = apps.microsoft.client_id.clone();
+            }
+        }
+        ui.label(
+            RichText::new("Microsoft requires an app registration for mail apps. Paste its Application (client) ID; see the README for how to create one.")
+                .font(font(13.0))
+                .color(p.text2),
+        );
+        ui.add_space(4.0);
+        widgets::text_input(ui, &mut ed.acc.oauth.client_id, "Application (client) ID", ui.available_width());
+        ui.add_space(6.0);
+    }
+    if ed.oauth_waiting {
+        ui.horizontal(|ui| {
+            widgets::spinner(ui, 16.0);
+            ui.label(RichText::new("Finish signing in in your browser…").font(font(14.0)));
+            ui.add_space(8.0);
+            if widgets::secondary_button(ui, None, "Cancel").clicked() {
+                action = Some("oauth-cancel");
+            }
+        });
+        if let Some(url) = &ed.oauth_url {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Browser didn't open?").font(font(12.5)).color(p.text3));
+                let label = if ed.link_copied { "Link copied: paste it into your browser" } else { "Copy the sign-in link" };
+                if widgets::link(ui, label).clicked() {
+                    ui.ctx().copy_text(url.clone());
+                    ed.link_copied = true;
+                }
+            });
+        }
+        if provider == "google" {
+            ui.label(
+                RichText::new("If Google warns that the app is being tested or hasn't been verified, click Continue (or Advanced, then \"Go to … (unsafe)\"). It's your own key, so that's safe. If Google shows an error page instead, close it and press Cancel.")
+                    .font(font(12.5))
+                    .color(p.text3),
+            );
+        }
+    } else {
+        let label = if ed.has_oauth_token { format!("Sign in again with {name}") } else { format!("Sign in with {name}") };
+        let ready = key.is_some() || !ed.acc.oauth.client_id.trim().is_empty();
+        ui.horizontal_wrapped(|ui| {
+            if widgets::primary_button_ex(ui, Some(icons::SIGN_IN), &label, ready).clicked() {
+                action = Some("oauth");
+            }
+            if let Some(Ok(())) = &ed.oauth_result {
+                ui.label(RichText::new(format!("{} Signed in", icons::CHECK_CIRCLE)).font(icon_font(13.5)).color(p.success));
+            }
+        });
+        if let Some(Err(e)) = &ed.oauth_result {
+            ui.add_space(4.0);
+            ui.label(RichText::new(util::truncate_chars(e, 400)).font(font(12.5)).color(p.danger));
+        }
+    }
+    if provider == "google" {
+        if let Some(k) = &key {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format!("App key: {}", crate::ui::oauth_setup::describe(k))).font(font(12.0)).color(p.text3));
+                if !ed.oauth_waiting && widgets::link(ui, "Change").clicked() {
+                    action = Some("google-setup");
+                }
+            });
+        }
+    }
+    action
 }
 
 fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
@@ -223,7 +372,7 @@ fn server_fields(ui: &mut Ui, id: &str, s: &mut ServerConfig, width: f32) {
 }
 
 /// Shared by the settings dialog and the setup wizard.
-pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool) -> Option<&'static str> {
+pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool, apps: &OAuthApps) -> Option<&'static str> {
     let p = pal();
     let mut action = None;
     let w = (ui.available_width() - 140.0).max(200.0);
@@ -265,7 +414,8 @@ pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool) ->
             }
             AuthKind::OAuth2 => {
                 if ed.acc.oauth.auth_url.is_empty() {
-                    if let Some(p) = crate::engine::oauth::preset("microsoft") {
+                    let guess = if util::domain_of(&ed.acc.email).contains("gmail") { "google" } else { "microsoft" };
+                    if let Some(p) = crate::engine::oauth::preset(guess) {
                         ed.acc.oauth = p;
                     }
                 }
@@ -277,12 +427,23 @@ pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool) ->
                         _ => "Custom",
                     };
                     egui::ComboBox::from_id_salt("oauth-prov").selected_text(label).show_ui(ui, |ui| {
+                        // Only a real change of provider resets the key: the account's
+                        // refresh token belongs to the key it has now.
                         for (key, name) in [("google", "Google"), ("microsoft", "Microsoft")] {
-                            if ui.selectable_label(ed.acc.oauth.provider == key, name).clicked() {
-                                let (id, secret) = (ed.acc.oauth.client_id.clone(), ed.acc.oauth.client_secret.clone());
+                            if ui.selectable_label(ed.acc.oauth.provider == key, name).clicked() && ed.acc.oauth.provider != key {
                                 if let Some(mut p) = crate::engine::oauth::preset(key) {
-                                    p.client_id = id;
-                                    p.client_secret = secret;
+                                    // Back from "Custom": keep the key typed there if it belongs
+                                    // to this provider (Microsoft public clients have no secret).
+                                    if ed.acc.oauth.provider == "custom" {
+                                        let id = ed.acc.oauth.client_id.trim();
+                                        let google_id = id.ends_with(".apps.googleusercontent.com");
+                                        if key == "google" && google_id {
+                                            p.client_id = id.to_string();
+                                            p.client_secret = ed.acc.oauth.client_secret.clone();
+                                        } else if key == "microsoft" && !google_id {
+                                            p.client_id = id.to_string();
+                                        }
+                                    }
                                     ed.acc.oauth = p;
                                 }
                             }
@@ -292,14 +453,15 @@ pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool) ->
                         }
                     });
                 });
-                egui::Grid::new("oauth").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                    ui.label(RichText::new("Client ID").color(p.text2));
-                    widgets::text_input(ui, &mut ed.acc.oauth.client_id, "From your app registration", w);
-                    ui.end_row();
-                    ui.label(RichText::new("Client secret").color(p.text2));
-                    widgets::text_input_ex(ui, &mut ed.acc.oauth.client_secret, "Optional (Google desktop apps need it)", w, true);
-                    ui.end_row();
-                    if ed.acc.oauth.provider == "custom" {
+                ui.add_space(6.0);
+                if ed.acc.oauth.provider == "custom" {
+                    egui::Grid::new("oauth").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+                        ui.label(RichText::new("Client ID").color(p.text2));
+                        widgets::text_input(ui, &mut ed.acc.oauth.client_id, "From your app registration", w);
+                        ui.end_row();
+                        ui.label(RichText::new("Client secret").color(p.text2));
+                        widgets::text_input_ex(ui, &mut ed.acc.oauth.client_secret, "If your provider issued one", w, true);
+                        ui.end_row();
                         ui.label(RichText::new("Authorize URL").color(p.text2));
                         widgets::text_input(ui, &mut ed.acc.oauth.auth_url, "https://…/authorize", w);
                         ui.end_row();
@@ -309,31 +471,10 @@ pub fn account_form(ui: &mut Ui, ed: &mut AccountEditor, show_identity: bool) ->
                         ui.label(RichText::new("Scopes").color(p.text2));
                         widgets::text_input(ui, &mut ed.acc.oauth.scopes, "space separated", w);
                         ui.end_row();
-                    }
-                });
-                ui.label(
-                    RichText::new("Register a desktop (public) application with your provider, allow a http://localhost redirect, then paste its client ID here.")
-                        .font(font(12.0))
-                        .color(p.text3),
-                );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ed.oauth_waiting {
-                        widgets::spinner(ui, 16.0);
-                        ui.label("Waiting for you to finish signing in in your browser…");
-                    } else if widgets::primary_button(ui, Some(icons::SIGN_IN), "Sign in with browser").clicked() {
-                        action = Some("oauth");
-                    }
-                    match &ed.oauth_result {
-                        Some(Ok(())) => {
-                            ui.label(RichText::new(format!("{} Signed in", icons::CHECK_CIRCLE)).font(icon_font(13.0)).color(p.success));
-                        }
-                        Some(Err(e)) => {
-                            ui.label(RichText::new(util::truncate_chars(e, 120)).font(font(12.5)).color(p.danger));
-                        }
-                        None => {}
-                    }
-                });
+                    });
+                    ui.add_space(6.0);
+                }
+                action = oauth_section(ui, ed, apps);
             }
         }
     });
@@ -434,7 +575,7 @@ impl App {
                 });
             });
         });
-        if resp.should_close() && st.account.is_none() && st.rule_edit.is_none() {
+        if resp.should_close() && st.account.is_none() && st.rule_edit.is_none() && st.google_setup.is_none() {
             open = false;
         }
         if self.cfg != before {
@@ -450,8 +591,56 @@ impl App {
         }
     }
 
+    /// Starts the browser sign-in for the account in `ed` with the app key
+    /// RustMail should use for it.
+    /// The account itself only switches to that key once the sign-in has
+    /// succeeded (see the `OAuthResult` handling), because its current refresh
+    /// token belongs to its current key.
+    pub fn start_oauth(&mut self, ed: &mut AccountEditor) {
+        let mut acc = ed.acc.clone();
+        if let Some(k) = crate::engine::oauth::key_for_sign_in(&self.cfg.oauth_apps, &acc.oauth) {
+            crate::engine::oauth::apply_key(&mut acc.oauth, &k);
+        }
+        // Older accounts only asked for mail; a new sign-in asks for calendar too.
+        crate::engine::oauth::upgrade_scopes(&mut acc.oauth);
+        ed.oauth_waiting = true;
+        ed.oauth_result = None;
+        ed.oauth_url = None;
+        ed.link_copied = false;
+        self.engine.send(Command::OAuthSignIn { account: Box::new(acc) });
+    }
+
+    /// Saves the key from the Google setup guide for every Google account.
+    pub fn save_google_key(&mut self, key: OAuthClientKey) {
+        self.toast(
+            if key.source.is_empty() { "Google sign-in is ready".to_string() } else { format!("Google sign-in is ready (key from {})", key.source) },
+            ToastKind::Success,
+        );
+        self.cfg.oauth_apps.google = key;
+        self.save_config_now();
+    }
+
     fn settings_accounts(&mut self, ui: &mut Ui, st: &mut SettingsState) {
         let p = pal();
+        if let Some(setup) = st.google_setup.as_mut() {
+            match setup.ui(ui) {
+                crate::ui::oauth_setup::SetupResult::Working => {}
+                crate::ui::oauth_setup::SetupResult::Cancel => {
+                    st.google_setup = None;
+                    st.sign_in_after_setup = false;
+                }
+                crate::ui::oauth_setup::SetupResult::Done(key) => {
+                    st.google_setup = None;
+                    self.save_google_key(key);
+                    if std::mem::take(&mut st.sign_in_after_setup) {
+                        if let Some(ed) = st.account.as_mut().filter(|e| e.acc.oauth.provider == "google") {
+                            self.start_oauth(ed);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if let Some(ed) = st.account.as_mut() {
             let mut close = false;
             ui.horizontal(|ui| {
@@ -465,11 +654,19 @@ impl App {
                     ui.label("This offline account lives only on this computer. It's great for trying things out.");
                 });
             }
-            let action = if ed.acc.is_local() { None } else { account_form(ui, ed, true) };
-            if action == Some("oauth") {
-                ed.oauth_waiting = true;
-                ed.oauth_result = None;
-                self.engine.send(Command::OAuthSignIn { account: Box::new(ed.acc.clone()) });
+            let action = if ed.acc.is_local() { None } else { account_form(ui, ed, true, &self.cfg.oauth_apps) };
+            match action {
+                Some("oauth") => self.start_oauth(ed),
+                Some("oauth-cancel") => {
+                    ed.oauth_waiting = false;
+                    self.engine.send(Command::OAuthCancel { account_id: ed.acc.id.clone() });
+                }
+                Some("google-setup") => {
+                    st.google_setup = Some(crate::ui::oauth_setup::GoogleSetup::new());
+                    st.sign_in_after_setup = true;
+                    return;
+                }
+                _ => {}
             }
             group(ui, "Sync", |ui| {
                 setting_row(ui, "Check for new mail every", "Minutes between automatic syncs", |ui| {
@@ -623,7 +820,59 @@ impl App {
                 self.add_demo();
             }
         });
-        ui.add_space(16.0);
+        ui.add_space(20.0);
+        let google = self.cfg.oauth_apps.google.clone();
+        let builtin = crate::engine::oauth::builtin_key("google");
+        group(ui, "Google sign-in", |ui| {
+            let (text, color) = if google.is_set() {
+                (format!("Ready. Every Google account signs in with the key {}.", crate::ui::oauth_setup::describe(&google)), p.text)
+            } else if builtin.is_some() {
+                ("Ready. This copy of RustMail has a Google key built in.".to_string(), p.text)
+            } else {
+                ("Not set up yet. You'll be guided through it the first time you add a Google account.".to_string(), p.text2)
+            };
+            ui.label(RichText::new(text).font(font(13.5)).color(color));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let label = if google.is_set() { "Use a different key" } else { "Set up now" };
+                if widgets::secondary_button(ui, Some(icons::KEY), label).clicked() {
+                    st.google_setup = Some(crate::ui::oauth_setup::GoogleSetup::new());
+                    st.sign_in_after_setup = false;
+                }
+                if google.is_set() {
+                    if !google.project_id.is_empty() && widgets::secondary_button(ui, Some(icons::ARROW_SQUARE_OUT), "Open in Google Cloud").clicked() {
+                        let _ = open::that_detached(format!("https://console.cloud.google.com/auth/clients?project={}", google.project_id));
+                    }
+                    if widgets::secondary_button(ui, Some(icons::TRASH), "Forget key").clicked() {
+                        self.cfg.oauth_apps.google = OAuthClientKey::default();
+                        self.save_config_now();
+                    }
+                }
+            });
+            if google.is_set() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Accounts that already signed in keep working if you forget or change the key.")
+                        .font(font(12.0))
+                        .color(p.text3),
+                );
+            }
+        });
+        let microsoft = self.cfg.oauth_apps.microsoft.clone();
+        if microsoft.is_set() && crate::engine::oauth::builtin_key("microsoft").is_none() {
+            group(ui, "Microsoft sign-in", |ui| {
+                ui.label(
+                    RichText::new(format!("New Microsoft accounts start with the client ID {}.", microsoft.client_id))
+                        .font(font(13.5))
+                        .color(p.text),
+                );
+                ui.add_space(8.0);
+                if widgets::secondary_button(ui, Some(icons::TRASH), "Forget client ID").clicked() {
+                    self.cfg.oauth_apps.microsoft = OAuthClientKey::default();
+                    self.save_config_now();
+                }
+            });
+        }
         ui.label(
             RichText::new(format!("Passwords are stored in your {}.", secrets::backend_name()))
                 .font(font(12.0))
