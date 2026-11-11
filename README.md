@@ -52,11 +52,20 @@ stored in a private file (mode 0600) in the data folder.
   snooze, sweep, junk / not junk, block sender, unified "All inboxes".
 - Virtualised message list grouped by date, hover actions, multi-select
   (Ctrl/Shift-click or the round check boxes), drag messages onto folders, context menus.
+- **Drag messages into other programs** (Windows): drag one or more messages out of the
+  window and drop them on another program or a folder; they arrive as `.eml` files named
+  after their subjects. That files an e-mail with a customer in an accounting program
+  such as QuickBooks, attaches it to a document, or saves it to a folder, in one motion.
 - **Reading pane** right, bottom or off; threaded conversation cards, safe HTML rendering
   (no scripts, remote images blocked until you allow them, tracking pixels dropped, dark
   mode colour adaptation), inline images, attachments (open / save / save all), meeting
   invitations with **Accept / Tentative / Decline** (sends an iMIP reply), read-receipt
-  requests, one-click unsubscribe, view source, save as `.eml`.
+  requests, one-click unsubscribe, view source, save as `.eml` or **PDF**.
+- **Save as PDF** (right-click a message, or its **…** menu): the subject, people, date
+  and attachment list followed by the message as it reads in the app. Text can be
+  selected and searched, links stay clickable and inline images are included; remote
+  images are never downloaded (their description is printed instead). Pages are Letter
+  in the Americas and A4 elsewhere.
 - **Compose** inline or in its own window: recipient "pills" with contact
   auto-complete, Cc/Bcc, formatting toolbar (Markdown → HTML, with live preview; a
   plain-text part is always included), attachments (button or drag-and-drop), importance,
@@ -70,6 +79,25 @@ stored in a private file (mode 0600) in the data folder.
 - Undo for delete / archive / move (server changes are applied after the undo window).
 - Failed sends stay in the outbox with Retry / Discard.
 
+**Moving from Outlook** — **Import from Outlook…** (on the welcome screen and under
+Settings → Accounts) reads an Outlook data file, `.pst` or `.ost`, and brings in:
+- **Mail**, with its folders, read / flagged / replied state, importance, categories,
+  attachments and inline pictures. It goes into a mailbox of its own, named after the
+  file, next to your accounts: an offline copy on this computer that you can read,
+  search and organize.
+- **Contacts**, **calendar events** (including repeating ones and reminders) and
+  **tasks**, which join the ones you already have. Importing a file a second time adds
+  no duplicates of these.
+
+The file is only read, never changed; close Outlook first if it has the file open.
+Files written by Outlook 2003 and later work, including the `.ost` caches of Outlook 2013
+and later and password-protected files (the password in a `.pst` doesn't encrypt
+anything). The older Outlook 97-2002 format is read the same way but hasn't been tried
+on real files.
+A large file takes a while; you can stop at any time and keep what is in so far.
+`rustmail --import-outlook FILE` does the same without opening a window (see
+[Known limitations](#known-limitations) for what is not carried over).
+
 **Calendar** — day, work week, week and month views, mini month, overlap-aware layout,
 all-day and multi-day events, repeating events (daily, weekdays, weekly, monthly,
 yearly), reminders with desktop notifications, categories, "show as", birthdays from
@@ -82,8 +110,20 @@ suggested contacts collected from mail you send; vCard import/export.
 custom lists, due dates, reminders and notes.
 
 **Look and feel** — light / dark / system theme, eight accent colours, Compact / Cozy /
-Roomy density, zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
+Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
 window decorations), resizable panes that remember their size.
+
+### Slim toolbar
+
+For a calmer window, turn on **Slim toolbar** (View → Slim toolbar, or Settings →
+Appearance). The Home / View / Help tabs and the ribbon give way to one compact row of
+icons with the everyday commands — new, delete, archive, move, reply, reply all, forward,
+read / unread, flag — and a **⋯** menu on the right with everything else: pin, snooze,
+categorize, junk, sweep, send / receive, layout, density, theme, zoom, settings and help.
+**Show the full ribbon** in that menu switches back. Keyboard shortcuts work the same in
+both.
+
+![Slim toolbar with its menu open](docs/screenshots/slim.png)
 
 ## Keyboard shortcuts
 
@@ -141,7 +181,7 @@ username = "jane@example.com"
 
 Command-line options: `--demo`, `--data-dir DIR`, `--module mail|calendar|people|todo`,
 `--theme light|dark`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
-`--google-setup`, `--help`.
+`--google-setup`, `--import-outlook FILE`, `--help`.
 
 ### Google accounts (Gmail, Google Workspace)
 
@@ -270,7 +310,9 @@ start-up and exit (useful for visual checks in CI).
 | `src/engine/` | Background sync engine (tokio): one actor per account, IMAP (`async-imap`), SMTP (`lettre`), auto-discovery, OAuth, rules |
 | `src/store.rs` | SQLite cache with FTS5 search, contacts, events, tasks, outbox |
 | `src/mime.rs` | Parsing (`mail-parser`) and building (`lettre`) messages |
+| `src/pdf.rs` | Saving a message as a PDF (`krilla`, shaping with `rustybuzz`) |
 | `src/cal.rs`, `src/vcard.rs` | iCalendar and vCard |
+| `src/outlook/` | Import of Outlook `.pst` / `.ost` files: reading (`outlook-pst`), conversion to mail, contacts, events and tasks, compressed RTF bodies |
 | `src/demo.rs` | The offline demo mailbox |
 
 ## Known limitations
@@ -279,6 +321,18 @@ start-up and exit (useful for visual checks in CI).
   CalDAV/CardDAV or Exchange sync yet. Times in invitations that use a named time zone
   are read as local time.
 - POP3 is not supported.
+- Dragging messages into other programs works on Windows only for now; on Linux and
+  macOS use **Save as .eml…** from a message's menu. The drag becomes a file drag when the
+  pointer leaves the RustMail window, so with a maximized window drag onto the taskbar
+  button of the other program (or make the window smaller).
+- An imported Outlook mailbox stays on this computer: its mail is not uploaded to your
+  mail server, and mail can't be sent from it (replies go out from one of your accounts).
+  Not carried over: distribution lists, journal entries, rules and signatures, changes
+  made to single occurrences of a repeating event, and attachments inside an attached
+  message. People who only have an Exchange-internal address keep their name, with a
+  placeholder address.
 - The HTML renderer favours readability over pixel-perfect layout: table-based designs
   are shown as a single column, and CSS beyond inline styles is ignored.
 - Rich-text composing uses Markdown syntax with a preview rather than WYSIWYG editing.
+- PDFs follow the reading pane's single-column layout, save one message at a time (not a
+  whole conversation), and don't reorder right-to-left text.

@@ -217,6 +217,17 @@ impl Default for AccountConfig {
 }
 
 impl AccountConfig {
+    /// The offline demo mailbox.
+    pub fn is_demo(&self) -> bool {
+        self.is_local() && self.email == crate::demo::DEMO_EMAIL
+    }
+
+    /// An offline mailbox imported from an Outlook data file: something to
+    /// read and search, not an account mail can be sent from.
+    pub fn is_archive(&self) -> bool {
+        self.is_local() && self.provider == crate::outlook::PROVIDER
+    }
+
     pub fn name(&self) -> &str {
         if !self.label.trim().is_empty() {
             self.label.trim()
@@ -284,6 +295,9 @@ pub struct AppearanceSettings {
     pub zoom: f32,
     pub custom_titlebar: bool,
     pub time_24h: bool,
+    /// One compact toolbar with the everyday commands instead of the
+    /// tabbed ribbon; the rest lives in its "More" menu.
+    pub slim: bool,
 }
 
 impl Default for AppearanceSettings {
@@ -295,6 +309,7 @@ impl Default for AppearanceSettings {
             zoom: 1.0,
             custom_titlebar: true,
             time_24h: false,
+            slim: false,
         }
     }
 }

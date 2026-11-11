@@ -27,6 +27,11 @@ rustls-native-certs = "0.8"
 webpki-roots = "1"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "ring", "rustls-native-certs"] }
 mail-parser = "0.11"
+# Microsoft's outlook-pst 1.2.0 plus fixes for real-world PST files and the
+# Outlook 2013+ OST layout (not yet released upstream). Pinned to the exact
+# version that was reviewed; the library name is still `outlook_pst`.
+outlook-pst = { package = "outlook-pst-ost", version = "=1.3.0" }
+encoding_rs = "0.8"
 hickory-resolver = "0.26"
 ureq = "3"
 roxmltree = "0.21"
@@ -56,6 +61,21 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 regex = "1"
+krilla = { version = "0.8", default-features = false, features = ["raster-images"] }
+rustybuzz = "0.20"
+
+# Dragging messages out of the window into other programs.
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62" # the `implement` macro refers to it by name
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Shell",
+] }
 
 [profile.dev]
 opt-level = 1
