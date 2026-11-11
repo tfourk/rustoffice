@@ -106,8 +106,20 @@ suggested contacts collected from mail you send; vCard import/export.
 custom lists, due dates, reminders and notes.
 
 **Look and feel** — light / dark / system theme, eight accent colours, Compact / Cozy /
-Roomy density, zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
+Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
 window decorations), resizable panes that remember their size.
+
+### Slim toolbar
+
+For a calmer window, turn on **Slim toolbar** (View → Slim toolbar, or Settings →
+Appearance). The Home / View / Help tabs and the ribbon give way to one compact row of
+icons with the everyday commands — new, delete, archive, move, reply, reply all, forward,
+read / unread, flag — and a **⋯** menu on the right with everything else: pin, snooze,
+categorize, junk, sweep, send / receive, layout, density, theme, zoom, settings and help.
+**Show the full ribbon** in that menu switches back. Keyboard shortcuts work the same in
+both.
+
+![Slim toolbar with its menu open](docs/screenshots/slim.png)
 
 ## Keyboard shortcuts
 
