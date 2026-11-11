@@ -10,6 +10,7 @@ mod icons;
 mod mime;
 mod model;
 mod notify;
+mod pdf;
 mod secrets;
 mod store;
 mod theme;

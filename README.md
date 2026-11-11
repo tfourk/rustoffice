@@ -56,7 +56,12 @@ stored in a private file (mode 0600) in the data folder.
   (no scripts, remote images blocked until you allow them, tracking pixels dropped, dark
   mode colour adaptation), inline images, attachments (open / save / save all), meeting
   invitations with **Accept / Tentative / Decline** (sends an iMIP reply), read-receipt
-  requests, one-click unsubscribe, view source, save as `.eml`.
+  requests, one-click unsubscribe, view source, save as `.eml` or **PDF**.
+- **Save as PDF** (right-click a message, or its **…** menu): the subject, people, date
+  and attachment list followed by the message as it reads in the app. Text can be
+  selected and searched, links stay clickable and inline images are included; remote
+  images are never downloaded (their description is printed instead). Pages are Letter
+  in the Americas and A4 elsewhere.
 - **Compose** inline or in its own window: recipient "pills" with contact
   auto-complete, Cc/Bcc, formatting toolbar (Markdown → HTML, with live preview; a
   plain-text part is always included), attachments (button or drag-and-drop), importance,
@@ -270,6 +275,7 @@ start-up and exit (useful for visual checks in CI).
 | `src/engine/` | Background sync engine (tokio): one actor per account, IMAP (`async-imap`), SMTP (`lettre`), auto-discovery, OAuth, rules |
 | `src/store.rs` | SQLite cache with FTS5 search, contacts, events, tasks, outbox |
 | `src/mime.rs` | Parsing (`mail-parser`) and building (`lettre`) messages |
+| `src/pdf.rs` | Saving a message as a PDF (`krilla`, shaping with `rustybuzz`) |
 | `src/cal.rs`, `src/vcard.rs` | iCalendar and vCard |
 | `src/demo.rs` | The offline demo mailbox |
 
@@ -282,3 +288,5 @@ start-up and exit (useful for visual checks in CI).
 - The HTML renderer favours readability over pixel-perfect layout: table-based designs
   are shown as a single column, and CSS beyond inline styles is ignored.
 - Rich-text composing uses Markdown syntax with a preview rather than WYSIWYG editing.
+- PDFs follow the reading pane's single-column layout, save one message at a time (not a
+  whole conversation), and don't reorder right-to-left text.
