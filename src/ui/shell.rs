@@ -212,12 +212,21 @@ impl App {
                 .statuses
                 .values()
                 .any(|s| matches!(s, SyncStatus::Syncing(_) | SyncStatus::Connecting));
+            // Community link: last in the row and muted, so it stays out of the way.
+            let discord = crate::app::discord_invite();
             if syncing {
                 let (r, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
                 ui.put(Rect::from_center_size(r.center(), vec2(16.0, 16.0)), egui::Spinner::new().size(16.0).color(p.accent));
             } else if widgets::icon_button_ex(ui, icons::ARROWS_CLOCKWISE, 34.0, 18.0, "Send / Receive all folders (F9)", false, None).clicked() {
                 self.engine.send(Command::SyncAll { full: true });
                 self.engine.send(Command::ProcessOutbox);
+            }
+            if let Some(link) = discord {
+                if widgets::icon_button_ex(ui, icons::DISCORD_LOGO, 34.0, 17.0, "Join our Discord server", false, Some(p.text3)).clicked() {
+                    if let Err(e) = open::that(link) {
+                        self.toast(format!("Couldn't open the browser: {e}"), ToastKind::Error);
+                    }
+                }
             }
         });
     }

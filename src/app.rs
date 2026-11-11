@@ -74,6 +74,19 @@ pub enum Dialog {
     NewTaskList { name: String },
 }
 
+/// Invitation link to the project's Discord server, shown as a small icon
+/// in the title bar. Empty hides the icon.
+pub const DISCORD_INVITE: &str = "";
+
+/// The invitation link, if one is set and it really is a Discord invitation.
+pub fn discord_invite() -> Option<&'static str> {
+    let link = DISCORD_INVITE.trim();
+    ["https://discord.gg/", "https://discord.com/invite/"]
+        .iter()
+        .any(|prefix| link.len() > prefix.len() && link.starts_with(prefix))
+        .then_some(link)
+}
+
 pub struct StartOptions {
     pub demo: bool,
     pub module: Option<Module>,
