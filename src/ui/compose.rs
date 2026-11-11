@@ -401,8 +401,13 @@ impl App {
             .current_folder_id()
             .and_then(|id| self.mail.find_folder(id))
             .map(|f| f.account_id.clone());
+        // Mail can't be sent from an imported Outlook mailbox: write from a
+        // real account when there is one.
+        let can_send = |a: &&crate::config::AccountConfig| a.enabled && !a.is_archive();
         current
-            .filter(|id| self.cfg.account(id).map(|a| a.enabled).unwrap_or(false))
+            .filter(|id| self.cfg.account(id).as_ref().is_some_and(can_send))
+            .or_else(|| self.cfg.default_account().filter(can_send).map(|a| a.id.clone()))
+            .or_else(|| self.cfg.accounts.iter().find(can_send).map(|a| a.id.clone()))
             .or_else(|| self.cfg.default_account().map(|a| a.id.clone()))
             .unwrap_or_default()
     }
@@ -641,6 +646,10 @@ impl App {
 
     fn send_compose(&mut self, mut c: Compose) -> Result<(), Compose> {
         c.commit_all();
+        if self.cfg.account(&c.account_id).is_some_and(|a| a.is_archive()) {
+            self.toast("This mailbox is an offline copy of an Outlook file. Add an e-mail account to send mail.", ToastKind::Error);
+            return Err(c);
+        }
         if c.to.is_empty() && c.cc.is_empty() && c.bcc.is_empty() {
             self.toast("Add at least one recipient", ToastKind::Error);
             return Err(c);

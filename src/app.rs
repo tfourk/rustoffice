@@ -115,6 +115,8 @@ pub struct App {
     pub settings: Option<SettingsState>,
     pub wizard: Option<WizardState>,
     pub dialog: Option<Dialog>,
+    /// An import from an Outlook data file, running or just finished.
+    pub outlook: Option<crate::ui::outlook_import::OutlookImport>,
     pub search: String,
     pub focus_search: bool,
     pub cfg_dirty_at: Option<f64>,
@@ -146,7 +148,7 @@ impl App {
             Store::open(&std::env::temp_dir().join("rustmail-fallback.db"))
                 .expect("database")
         });
-        if start.demo && !cfg.accounts.iter().any(|a| a.is_local()) {
+        if start.demo && !cfg.accounts.iter().any(|a| a.is_demo()) {
             if let Err(e) = crate::demo::create(&store, &mut cfg) {
                 log::error!("demo: {e}");
             }
@@ -179,6 +181,7 @@ impl App {
             settings: None,
             wizard: None,
             dialog: None,
+            outlook: None,
             search: String::new(),
             focus_search: false,
             cfg_dirty_at: None,
