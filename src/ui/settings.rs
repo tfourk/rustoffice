@@ -649,7 +649,11 @@ impl App {
                 }
             });
             ui.add_space(8.0);
-            if ed.acc.is_local() {
+            if ed.acc.is_archive() {
+                group(ui, "Outlook mailbox", |ui| {
+                    ui.label("This mailbox was imported from an Outlook data file and lives only on this computer. You can read, search and organize it; to send mail, add an e-mail account.");
+                });
+            } else if ed.acc.is_local() {
                 group(ui, "Demo mailbox", |ui| {
                     ui.label("This offline account lives only on this computer. It's great for trying things out.");
                 });
@@ -782,10 +786,11 @@ impl App {
                                 }
                             });
                             ui.label(RichText::new(&a.email).font(font(13.0)).color(p.text2));
-                            let status = match self.statuses.get(&a.id) {
+                            let status = match self.statuses.get(&a.id).filter(|_| !a.is_archive()) {
                                 Some(SyncStatus::Error(e)) => (format!("{} {}", icons::WARNING, util::truncate_chars(e, 90)), p.danger),
                                 Some(SyncStatus::Syncing(s)) => (s.clone(), p.text3),
                                 Some(SyncStatus::Idle { last }) if *last > 0 => (format!("Synced {}", util::time_ago(*last)), p.text3),
+                                _ if a.is_archive() => ("Imported from Outlook · stored on this computer".to_string(), p.text3),
                                 _ => (if a.is_local() { "Offline demo account".to_string() } else { a.provider.clone() }, p.text3),
                             };
                             ui.label(RichText::new(status.0).font(icon_font(12.5)).color(status.1));
@@ -816,7 +821,13 @@ impl App {
             if widgets::primary_button(ui, Some(icons::USER_PLUS), "Add account").clicked() {
                 self.wizard = Some(crate::ui::wizard::WizardState::new(false));
             }
-            if !self.cfg.accounts.iter().any(|a| a.is_local()) && widgets::secondary_button(ui, Some(icons::SPARKLE), "Add demo mailbox").clicked() {
+            if widgets::secondary_button(ui, Some(icons::DOWNLOAD_SIMPLE), "Import from Outlook…")
+                .on_hover_text("Bring in mail, contacts, calendar and tasks from an Outlook data file (.pst or .ost)")
+                .clicked()
+            {
+                self.import_outlook();
+            }
+            if !self.cfg.accounts.iter().any(|a| a.is_demo()) && widgets::secondary_button(ui, Some(icons::SPARKLE), "Add demo mailbox").clicked() {
                 self.add_demo();
             }
         });

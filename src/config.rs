@@ -217,6 +217,17 @@ impl Default for AccountConfig {
 }
 
 impl AccountConfig {
+    /// The offline demo mailbox.
+    pub fn is_demo(&self) -> bool {
+        self.is_local() && self.email == crate::demo::DEMO_EMAIL
+    }
+
+    /// An offline mailbox imported from an Outlook data file: something to
+    /// read and search, not an account mail can be sent from.
+    pub fn is_archive(&self) -> bool {
+        self.is_local() && self.provider == crate::outlook::PROVIDER
+    }
+
     pub fn name(&self) -> &str {
         if !self.label.trim().is_empty() {
             self.label.trim()

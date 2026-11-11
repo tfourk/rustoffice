@@ -108,6 +108,7 @@ pub enum MenuCmd {
     AlwaysFocused(bool),
     ViewSource,
     SaveEml,
+    SavePdf,
     EditDraft,
     OpenFull,
 }
@@ -1015,7 +1016,14 @@ impl App {
             })
             .collect();
         let has_more = messages.len() >= self.mail.limit;
-        let can_older = matches!(self.mail.view, MailView::Folder(_)) && !searching;
+        // Offline mailboxes (the demo, Outlook imports) have no server to ask.
+        let offline = self
+            .mail
+            .current_folder_id()
+            .and_then(|id| self.mail.find_folder(id))
+            .and_then(|f| self.cfg.account(&f.account_id))
+            .is_some_and(|a| a.is_local());
+        let can_older = matches!(self.mail.view, MailView::Folder(_)) && !searching && !offline;
         let footer = if has_more || can_older { 56.0 } else { 12.0 };
         let total: f32 = heights.iter().sum::<f32>() + footer;
         let scroll_target = if self.mail.scroll_to_selected {
@@ -1417,6 +1425,9 @@ impl App {
         if widgets::menu_item(ui, icons::DOWNLOAD_SIMPLE, "Save as .eml…").clicked() {
             out.push(MenuCmd::SaveEml);
         }
+        if widgets::menu_item(ui, icons::FILE_PDF, "Save as PDF…").clicked() {
+            out.push(MenuCmd::SavePdf);
+        }
     }
 
     fn category_items(&self, ui: &mut Ui, current: &[String], out: &mut Vec<MenuCmd>) {
@@ -1579,6 +1590,7 @@ impl App {
                 }
             }
             MenuCmd::SaveEml => self.save_eml(ids[0]),
+            MenuCmd::SavePdf => self.save_pdf(ids[0]),
             MenuCmd::EditDraft => self.edit_draft(ids[0]),
             MenuCmd::OpenFull => self.open_message_full(ids[0]),
         }
@@ -2097,6 +2109,27 @@ impl App {
                 Err(e) => self.toast(format!("Could not save: {e}"), ToastKind::Error),
             };
         }
+    }
+
+    /// Writes the message (header block and body) to a PDF file.
+    fn save_pdf(&mut self, id: MsgId) {
+        let Ok(Some(raw)) = self.store.raw_body(id) else {
+            self.engine.send(Command::FetchBody { msg_id: id });
+            self.toast("Downloading message… try again in a moment", ToastKind::Info);
+            return;
+        };
+        let summary = self.store.message(id).ok().flatten();
+        let subject = summary.as_ref().map(|m| m.subject.clone()).unwrap_or_default();
+        let name = format!("{}.pdf", util::sanitize_filename(if subject.is_empty() { "message" } else { &subject }));
+        let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("PDF", &["pdf"]).save_file() else {
+            return;
+        };
+        let result = crate::pdf::message_pdf(&raw, Some(&subject), summary.map(|m| m.date), crate::pdf::PageSize::for_region())
+            .and_then(|bytes| Ok(std::fs::write(&path, bytes)?));
+        match result {
+            Ok(()) => self.toast(format!("Saved {}", path.display()), ToastKind::Success),
+            Err(e) => self.toast(format!("Could not save: {e}"), ToastKind::Error),
+        };
     }
 
     // ========================================================== reading pane

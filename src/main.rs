@@ -10,6 +10,8 @@ mod icons;
 mod mime;
 mod model;
 mod notify;
+mod outlook;
+mod pdf;
 mod secrets;
 mod store;
 mod theme;
@@ -35,6 +37,7 @@ OPTIONS:
     --wizard               Open the add-account wizard
     --add-account <EMAIL>  Start adding the account with this address
     --google-setup         Open the Google sign-in setup guide
+    --import-outlook <FILE>  Import an Outlook data file (.pst or .ost) and exit
     -h, --help             Show this help
     -V, --version          Show the version
 ";
@@ -57,6 +60,7 @@ fn main() -> eframe::Result<()> {
         month: false,
         contact: None,
     };
+    let mut import_outlook: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -112,6 +116,14 @@ fn main() -> eframe::Result<()> {
                 start.add_account = args.get(i).cloned();
             }
             "--google-setup" => start.google_setup = true,
+            "--import-outlook" => {
+                i += 1;
+                import_outlook = args.get(i).cloned();
+                if import_outlook.is_none() {
+                    eprintln!("--import-outlook needs a file");
+                    std::process::exit(2);
+                }
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());
@@ -125,6 +137,10 @@ fn main() -> eframe::Result<()> {
         i += 1;
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,rustmail=info")).init();
+
+    if let Some(file) = import_outlook {
+        std::process::exit(import_outlook_file(std::path::Path::new(&file)));
+    }
 
     let (cfg, _) = config::AppConfig::load();
     let screenshot = std::env::var("RUSTMAIL_SCREENSHOT").is_ok();
@@ -154,6 +170,61 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, start)))),
     )
+}
+
+/// `--import-outlook`: imports the file without opening a window and
+/// returns the exit code. Close RustMail first if it is running, so it
+/// picks the new mailbox up when it starts.
+fn import_outlook_file(file: &std::path::Path) -> i32 {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    let (mut cfg, _) = config::AppConfig::load();
+    let store = match store::Store::open(&config::Paths::get().db_file()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Could not open the mail database: {e}");
+            return 1;
+        }
+    };
+    let account = outlook::mailbox_account(file, &cfg);
+    let progress = Mutex::new(outlook::Progress::default());
+    let last = Mutex::new(Instant::now());
+    let report = || {
+        let (Ok(p), Ok(mut last)) = (progress.lock(), last.lock()) else { return };
+        if last.elapsed() >= Duration::from_secs(2) {
+            *last = Instant::now();
+            eprintln!("{} of {} items… {}", p.done, p.total, p.folder);
+        }
+    };
+    let result = outlook::run(file, &store, &account.id, &progress, &AtomicBool::new(false), &report);
+    let mut progress = progress.into_inner().unwrap_or_default();
+    progress.finished = Some(result.map_err(|e| format!("{e:#}")));
+    let label = account.label.clone();
+    let mailbox = outlook::apply(&mut cfg, &store, account, &progress);
+    if let Some(Err(e)) = &progress.finished {
+        eprintln!("Could not import {}: {e}", file.display());
+        return 1;
+    }
+    if let Err(e) = cfg.save() {
+        eprintln!("Could not save the settings: {e}");
+        return 1;
+    }
+    println!("{}.", progress.summary());
+    if mailbox {
+        println!("The mail is in the mailbox \"{label}\".");
+    }
+    if progress.skipped > 0 {
+        println!("{} item(s) were left out (already imported, or of a kind RustMail has no place for).", progress.skipped);
+    }
+    if progress.failed > 0 {
+        println!("{} item(s) could not be read:", progress.failed);
+        for e in &progress.errors {
+            println!("  {e}");
+        }
+    }
+    0
 }
 
 /// A small envelope icon drawn in code (no image assets needed).

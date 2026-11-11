@@ -69,6 +69,7 @@ impl App {
         if self.wizard.is_some() {
             self.wizard_ui(&ctx);
         }
+        self.outlook_import_ui(&ctx);
         self.toasts_ui(&ctx);
         self.drag_preview(&ctx);
     }

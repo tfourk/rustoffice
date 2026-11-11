@@ -56,7 +56,12 @@ stored in a private file (mode 0600) in the data folder.
   (no scripts, remote images blocked until you allow them, tracking pixels dropped, dark
   mode colour adaptation), inline images, attachments (open / save / save all), meeting
   invitations with **Accept / Tentative / Decline** (sends an iMIP reply), read-receipt
-  requests, one-click unsubscribe, view source, save as `.eml`.
+  requests, one-click unsubscribe, view source, save as `.eml` or **PDF**.
+- **Save as PDF** (right-click a message, or its **…** menu): the subject, people, date
+  and attachment list followed by the message as it reads in the app. Text can be
+  selected and searched, links stay clickable and inline images are included; remote
+  images are never downloaded (their description is printed instead). Pages are Letter
+  in the Americas and A4 elsewhere.
 - **Compose** inline or in its own window: recipient "pills" with contact
   auto-complete, Cc/Bcc, formatting toolbar (Markdown → HTML, with live preview; a
   plain-text part is always included), attachments (button or drag-and-drop), importance,
@@ -69,6 +74,25 @@ stored in a private file (mode 0600) in the data folder.
 - Folder management: create, rename, delete, empty, mark all read, favorites.
 - Undo for delete / archive / move (server changes are applied after the undo window).
 - Failed sends stay in the outbox with Retry / Discard.
+
+**Moving from Outlook** — **Import from Outlook…** (on the welcome screen and under
+Settings → Accounts) reads an Outlook data file, `.pst` or `.ost`, and brings in:
+- **Mail**, with its folders, read / flagged / replied state, importance, categories,
+  attachments and inline pictures. It goes into a mailbox of its own, named after the
+  file, next to your accounts: an offline copy on this computer that you can read,
+  search and organize.
+- **Contacts**, **calendar events** (including repeating ones and reminders) and
+  **tasks**, which join the ones you already have. Importing a file a second time adds
+  no duplicates of these.
+
+The file is only read, never changed; close Outlook first if it has the file open.
+Files written by Outlook 2003 and later work, including the `.ost` caches of Outlook 2013
+and later and password-protected files (the password in a `.pst` doesn't encrypt
+anything). The older Outlook 97-2002 format is read the same way but hasn't been tried
+on real files.
+A large file takes a while; you can stop at any time and keep what is in so far.
+`rustmail --import-outlook FILE` does the same without opening a window (see
+[Known limitations](#known-limitations) for what is not carried over).
 
 **Calendar** — day, work week, week and month views, mini month, overlap-aware layout,
 all-day and multi-day events, repeating events (daily, weekdays, weekly, monthly,
@@ -153,7 +177,7 @@ username = "jane@example.com"
 
 Command-line options: `--demo`, `--data-dir DIR`, `--module mail|calendar|people|todo`,
 `--theme light|dark`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
-`--google-setup`, `--help`.
+`--google-setup`, `--import-outlook FILE`, `--help`.
 
 ### Google accounts (Gmail, Google Workspace)
 
@@ -282,7 +306,9 @@ start-up and exit (useful for visual checks in CI).
 | `src/engine/` | Background sync engine (tokio): one actor per account, IMAP (`async-imap`), SMTP (`lettre`), auto-discovery, OAuth, rules |
 | `src/store.rs` | SQLite cache with FTS5 search, contacts, events, tasks, outbox |
 | `src/mime.rs` | Parsing (`mail-parser`) and building (`lettre`) messages |
+| `src/pdf.rs` | Saving a message as a PDF (`krilla`, shaping with `rustybuzz`) |
 | `src/cal.rs`, `src/vcard.rs` | iCalendar and vCard |
+| `src/outlook/` | Import of Outlook `.pst` / `.ost` files: reading (`outlook-pst`), conversion to mail, contacts, events and tasks, compressed RTF bodies |
 | `src/demo.rs` | The offline demo mailbox |
 
 ## Known limitations
@@ -291,6 +317,14 @@ start-up and exit (useful for visual checks in CI).
   CalDAV/CardDAV or Exchange sync yet. Times in invitations that use a named time zone
   are read as local time.
 - POP3 is not supported.
+- An imported Outlook mailbox stays on this computer: its mail is not uploaded to your
+  mail server, and mail can't be sent from it (replies go out from one of your accounts).
+  Not carried over: distribution lists, journal entries, rules and signatures, changes
+  made to single occurrences of a repeating event, and attachments inside an attached
+  message. People who only have an Exchange-internal address keep their name, with a
+  placeholder address.
 - The HTML renderer favours readability over pixel-perfect layout: table-based designs
   are shown as a single column, and CSS beyond inline styles is ignored.
 - Rich-text composing uses Markdown syntax with a preview rather than WYSIWYG editing.
+- PDFs follow the reading pane's single-column layout, save one message at a time (not a
+  whole conversation), and don't reorder right-to-left text.
