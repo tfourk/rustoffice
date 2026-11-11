@@ -11,6 +11,7 @@ mod mime;
 mod model;
 mod notify;
 mod outlook;
+mod pdf;
 mod secrets;
 mod store;
 mod theme;

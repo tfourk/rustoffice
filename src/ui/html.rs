@@ -136,11 +136,11 @@ fn parse_color(v: &str) -> Option<Color32> {
     Some(theme::hex(named))
 }
 
-fn luminance(c: Color32) -> f32 {
+pub(crate) fn luminance(c: Color32) -> f32 {
     (0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32) / 255.0
 }
 
-fn saturation(c: Color32) -> f32 {
+pub(crate) fn saturation(c: Color32) -> f32 {
     let mx = c.r().max(c.g()).max(c.b()) as f32;
     let mn = c.r().min(c.g()).min(c.b()) as f32;
     if mx == 0.0 {
@@ -746,7 +746,7 @@ pub enum HtmlAction {
     ShowImages,
 }
 
-fn heading_scale(level: u8) -> f32 {
+pub(crate) fn heading_scale(level: u8) -> f32 {
     match level {
         1 => 1.6,
         2 => 1.35,
