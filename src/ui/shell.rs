@@ -42,8 +42,9 @@ impl App {
             .show_separator_line(false)
             .frame(Frame::NONE.fill(p.bg).inner_margin(Margin::symmetric(8, 0)))
             .show(ui, |ui| self.status_bar(ui));
+        let slim = self.cfg.appearance.slim;
         egui::Panel::top("ribbon")
-            .exact_size(88.0)
+            .exact_size(if slim { 48.0 } else { 88.0 })
             .resizable(false)
             .show_separator_line(false)
             .frame(Frame::NONE.fill(p.bg).inner_margin(Margin {
@@ -52,7 +53,7 @@ impl App {
                 top: 0,
                 bottom: 8,
             }))
-            .show(ui, |ui| self.ribbon(ui));
+            .show(ui, |ui| if slim { self.slim_bar(ui) } else { self.ribbon(ui) });
         egui::CentralPanel::no_frame().show(ui, |ui| match self.module {
             Module::Mail => self.mail_ui(ui),
             Module::Calendar => self.calendar_ui(ui),
@@ -68,6 +69,7 @@ impl App {
         if self.wizard.is_some() {
             self.wizard_ui(&ctx);
         }
+        self.outlook_import_ui(&ctx);
         self.toasts_ui(&ctx);
         self.drag_preview(&ctx);
     }
@@ -329,13 +331,167 @@ impl App {
                     match (self.module, self.ribbon_tab) {
                         (_, 1) => self.ribbon_view(ui, wide),
                         (_, 2) => self.ribbon_help(ui, wide),
-                        (Module::Mail, _) => self.ribbon_mail(ui, wide, large, medium),
+                        (Module::Mail, _) => self.ribbon_mail(ui, wide, large, medium, false),
                         (Module::Calendar, _) => self.ribbon_calendar(ui, medium),
                         (Module::People, _) => self.ribbon_people(ui, medium),
                         (Module::Todo, _) => self.ribbon_todo(ui, medium),
                     }
                 });
             });
+    }
+
+    /// The slim layout's only toolbar: the everyday commands as icons, and a
+    /// "More" menu with everything the ribbon's other buttons and tabs do.
+    fn slim_bar(&mut self, ui: &mut Ui) {
+        let p = pal();
+        Frame::NONE
+            .fill(p.card)
+            .corner_radius(CornerRadius::same(8))
+            .stroke(Stroke::new(1.0, if p.dark { p.stroke } else { mix(p.stroke, p.card, 0.4) }))
+            .inner_margin(Margin::symmetric(6, 4))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    match self.module {
+                        Module::Mail => self.ribbon_mail(ui, false, false, false, true),
+                        Module::Calendar => self.ribbon_calendar(ui, false),
+                        Module::People => self.ribbon_people(ui, false),
+                        Module::Todo => self.ribbon_todo(ui, false),
+                    }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let more = ribbon_button(ui, icons::DOTS_THREE, "More", false, true);
+                        egui::Popup::menu(&more).width(240.0).show(|ui| {
+                            ui.set_min_width(220.0);
+                            self.slim_more_menu(ui);
+                        });
+                    });
+                });
+            });
+    }
+
+    /// Everything the slim toolbar leaves out.
+    fn slim_more_menu(&mut self, ui: &mut Ui) {
+        if self.module == Module::Mail {
+            let sel = self.mail.selection.clone();
+            if !sel.is_empty() {
+                let msgs = self.store.messages_by_ids(&sel).unwrap_or_default();
+                let pinned = !msgs.is_empty() && msgs.iter().all(|m| m.pinned);
+                if widgets::menu_item(ui, icons::PUSH_PIN, if pinned { "Unpin" } else { "Pin" }).clicked() {
+                    self.toggle_pin(&sel);
+                }
+                ui.menu_button(format!("{}   Snooze", icons::CLOCK), |ui| self.snooze_menu(ui, &sel));
+                ui.menu_button(format!("{}   Categorize", icons::TAG), |ui| self.categorize_menu(ui, &sel));
+                if self.mail.current_role() == Some(FolderRole::Junk) {
+                    if widgets::menu_item(ui, icons::CHECK_CIRCLE, "Not junk").clicked() {
+                        self.junk_messages(&sel, true);
+                    }
+                } else if widgets::menu_item(ui, icons::PROHIBIT, "Report junk").clicked() {
+                    self.junk_messages(&sel, false);
+                }
+                if widgets::menu_item(ui, icons::SHIELD_CHECK, "Block sender").clicked() {
+                    self.block_sender(&sel);
+                }
+                if widgets::menu_item(ui, icons::BROOM, "Sweep").on_hover_text("Delete all messages from this sender in this folder").clicked() {
+                    self.sweep(&sel);
+                }
+                ui.separator();
+            }
+        }
+        if widgets::menu_item(ui, icons::ARROWS_CLOCKWISE, "Send / receive").clicked() {
+            self.engine.send(Command::SyncAll { full: true });
+            self.engine.send(Command::ProcessOutbox);
+        }
+        ui.separator();
+        let mut changed = false;
+        let check = |on: bool| if on { icons::CHECK } else { "" };
+        ui.menu_button(format!("{}   Layout", icons::SQUARES_FOUR), |ui| {
+            for pos in ReadingPanePos::ALL {
+                if widgets::menu_item(ui, check(self.cfg.mail.reading_pane == pos), pos.label()).clicked() {
+                    self.cfg.mail.reading_pane = pos;
+                    changed = true;
+                }
+            }
+            ui.separator();
+            let open = self.cfg.window.folder_pane_open;
+            if widgets::menu_item(ui, icons::SIDEBAR_SIMPLE, if open { "Hide folder pane" } else { "Show folder pane" }).clicked() {
+                self.cfg.window.folder_pane_open = !open;
+                changed = true;
+            }
+        });
+        ui.menu_button(format!("{}   Show", icons::LIST), |ui| {
+            let toggles = [
+                ("Conversations", self.cfg.mail.conversation_view),
+                ("Focused Inbox", self.cfg.mail.focused_inbox),
+                ("Preview text", self.cfg.mail.show_preview),
+                ("Sender images", self.cfg.mail.show_avatars),
+            ];
+            for (i, (label, on)) in toggles.into_iter().enumerate() {
+                if widgets::menu_item(ui, check(on), label).clicked() {
+                    match i {
+                        0 => self.cfg.mail.conversation_view = !on,
+                        1 => self.cfg.mail.focused_inbox = !on,
+                        2 => self.cfg.mail.show_preview = !on,
+                        _ => self.cfg.mail.show_avatars = !on,
+                    }
+                    changed = true;
+                }
+            }
+        });
+        ui.menu_button(format!("{}   Density", icons::ROWS), |ui| {
+            for d in Density::ALL {
+                if widgets::menu_item(ui, check(self.cfg.appearance.density == d), d.label()).clicked() {
+                    self.cfg.appearance.density = d;
+                    changed = true;
+                }
+            }
+        });
+        ui.menu_button(format!("{}   Theme", icons::CIRCLE_HALF), |ui| {
+            for t in ThemeMode::ALL {
+                if widgets::menu_item(ui, check(self.cfg.appearance.theme == t), t.label()).clicked() {
+                    self.cfg.appearance.theme = t;
+                    changed = true;
+                }
+            }
+        });
+        ui.menu_button(format!("{}   Zoom ({:.0}%)", icons::MAGNIFYING_GLASS, self.cfg.appearance.zoom * 100.0), |ui| {
+            for (icon, label, step) in [(icons::PLUS, "Zoom in", 0.1), (icons::MINUS, "Zoom out", -0.1)] {
+                if widgets::menu_item(ui, icon, label).clicked() {
+                    self.cfg.appearance.zoom = ((self.cfg.appearance.zoom + step) * 10.0).round() / 10.0;
+                    changed = true;
+                }
+            }
+            if widgets::menu_item(ui, "", "Reset to 100%").clicked() {
+                self.cfg.appearance.zoom = 1.0;
+                changed = true;
+            }
+        });
+        if widgets::menu_item(ui, icons::ARROWS_OUT_LINE_VERTICAL, "Show the full ribbon").clicked() {
+            self.cfg.appearance.slim = false;
+            self.ribbon_tab = 0;
+            changed = true;
+        }
+        if changed {
+            self.view_changed();
+        }
+        ui.separator();
+        if widgets::menu_item(ui, icons::GEAR_SIX, "Settings").clicked() {
+            self.settings = Some(SettingsState::default());
+        }
+        if widgets::menu_item(ui, icons::KEYBOARD, "Keyboard shortcuts").clicked() {
+            self.dialog = Some(Dialog::Shortcuts);
+        }
+        if widgets::menu_item(ui, icons::INFO, "About").clicked() {
+            self.dialog = Some(Dialog::About);
+        }
+    }
+
+    /// Applies a change to how things are shown (layout, density, theme, zoom).
+    fn view_changed(&mut self) {
+        self.cfg.appearance.zoom = self.cfg.appearance.zoom.clamp(0.7, 2.0);
+        self.mail.list_dirty = true;
+        self.mail.reading_flags_dirty = true;
+        self.mark_config_dirty();
     }
 
     fn new_item_button(&mut self, ui: &mut Ui, wide: bool) {
@@ -386,7 +542,9 @@ impl App {
         ribbon_separator(ui);
     }
 
-    fn ribbon_mail(&mut self, ui: &mut Ui, wide: bool, large: bool, medium: bool) {
+    /// `slim` keeps the everyday commands only (the others are in the slim
+    /// toolbar's "More" menu).
+    fn ribbon_mail(&mut self, ui: &mut Ui, wide: bool, large: bool, medium: bool, slim: bool) {
         self.new_item_button(ui, wide);
         let sel = self.mail.selection.clone();
         let has = !sel.is_empty();
@@ -397,20 +555,22 @@ impl App {
         if ribbon_button(ui, icons::ARCHIVE, "Archive", medium, has).clicked() {
             self.archive_messages(&sel);
         }
-        ribbon_menu(ui, icons::WARNING_OCTAGON, "Report", wide, has, |ui| {
-            if in_junk {
-                if widgets::menu_item(ui, icons::CHECK_CIRCLE, "Not junk").clicked() {
-                    self.junk_messages(&sel, true);
+        if !slim {
+            ribbon_menu(ui, icons::WARNING_OCTAGON, "Report", wide, has, |ui| {
+                if in_junk {
+                    if widgets::menu_item(ui, icons::CHECK_CIRCLE, "Not junk").clicked() {
+                        self.junk_messages(&sel, true);
+                    }
+                } else if widgets::menu_item(ui, icons::PROHIBIT, "Report junk").clicked() {
+                    self.junk_messages(&sel, false);
                 }
-            } else if widgets::menu_item(ui, icons::PROHIBIT, "Report junk").clicked() {
-                self.junk_messages(&sel, false);
+                if widgets::menu_item(ui, icons::SHIELD_CHECK, "Block sender").clicked() {
+                    self.block_sender(&sel);
+                }
+            });
+            if ribbon_button(ui, icons::BROOM, "Sweep", wide, has).on_hover_text("Delete all messages from this sender in this folder").clicked() {
+                self.sweep(&sel);
             }
-            if widgets::menu_item(ui, icons::SHIELD_CHECK, "Block sender").clicked() {
-                self.block_sender(&sel);
-            }
-        });
-        if ribbon_button(ui, icons::BROOM, "Sweep", wide, has).on_hover_text("Delete all messages from this sender in this folder").clicked() {
-            self.sweep(&sel);
         }
         let move_resp = ribbon_button_ex(ui, icons::FOLDER_SIMPLE, "Move to", wide, has, true, false);
         if has {
@@ -445,6 +605,9 @@ impl App {
         let flagged = !msgs.is_empty() && msgs.iter().all(|m| m.flagged);
         if ribbon_button_ex(ui, icons::FLAG, if flagged { "Unflag" } else { "Flag" }, large, has, false, flagged).clicked() {
             self.toggle_flag(&sel);
+        }
+        if slim {
+            return;
         }
         let pinned = !msgs.is_empty() && msgs.iter().all(|m| m.pinned);
         if ribbon_button_ex(ui, icons::PUSH_PIN, if pinned { "Unpin" } else { "Pin" }, large, has, false, pinned).clicked() {
@@ -532,11 +695,16 @@ impl App {
             self.cfg.appearance.zoom = ((self.cfg.appearance.zoom + 0.1) * 10.0).round() / 10.0;
             changed = true;
         }
+        ribbon_separator(ui);
+        if ribbon_button(ui, icons::ARROWS_IN_LINE_VERTICAL, "Slim toolbar", wide, true)
+            .on_hover_text("One compact row with the everyday commands; everything else moves into its ⋯ menu")
+            .clicked()
+        {
+            self.cfg.appearance.slim = true;
+            changed = true;
+        }
         if changed {
-            self.cfg.appearance.zoom = self.cfg.appearance.zoom.clamp(0.7, 2.0);
-            self.mail.list_dirty = true;
-            self.mail.reading_flags_dirty = true;
-            self.mark_config_dirty();
+            self.view_changed();
         }
     }
 

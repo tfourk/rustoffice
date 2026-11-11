@@ -118,6 +118,8 @@ pub struct App {
     /// A drag was handed to the system, which swallowed the mouse release:
     /// tell egui the button is up (see `raw_input_hook`).
     release_pointer: bool,
+    /// An import from an Outlook data file, running or just finished.
+    pub outlook: Option<crate::ui::outlook_import::OutlookImport>,
     pub search: String,
     pub focus_search: bool,
     pub cfg_dirty_at: Option<f64>,
@@ -150,7 +152,7 @@ impl App {
             Store::open(&std::env::temp_dir().join("rustmail-fallback.db"))
                 .expect("database")
         });
-        if start.demo && !cfg.accounts.iter().any(|a| a.is_local()) {
+        if start.demo && !cfg.accounts.iter().any(|a| a.is_demo()) {
             if let Err(e) = crate::demo::create(&store, &mut cfg) {
                 log::error!("demo: {e}");
             }
@@ -184,6 +186,7 @@ impl App {
             wizard: None,
             dialog: None,
             release_pointer: false,
+            outlook: None,
             search: String::new(),
             focus_search: false,
             cfg_dirty_at: None,

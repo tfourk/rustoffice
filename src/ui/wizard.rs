@@ -235,6 +235,10 @@ impl App {
                             w.focus = true;
                         }
                         ui.add_space(10.0);
+                        if widgets::secondary_button(ui, Some(icons::DOWNLOAD_SIMPLE), "Import from Outlook (.pst, .ost)").clicked() {
+                            self.import_outlook();
+                        }
+                        ui.add_space(10.0);
                         if widgets::secondary_button(ui, Some(icons::SPARKLE), "Explore with a demo mailbox").clicked() {
                             self.add_demo();
                             close = true;

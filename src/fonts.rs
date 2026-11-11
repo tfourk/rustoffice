@@ -2,6 +2,7 @@
 //! regular / semibold / bold weights and fall back to egui's bundled fonts.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use egui::{FontData, FontDefinitions, FontFamily};
 
@@ -49,6 +50,11 @@ fn is_variable(path: &Path) -> bool {
 
 /// Finds the face of `family` closest to `weight` (upright, normal width).
 fn find_face(db: &fontdb::Database, family: &str, weight: u16, exact: bool) -> Option<Face> {
+    find_face_styled(db, family, weight, exact, false)
+}
+
+/// Like [`find_face`], for the upright or the italic/oblique faces.
+fn find_face_styled(db: &fontdb::Database, family: &str, weight: u16, exact: bool, italic: bool) -> Option<Face> {
     let mut best: Option<(&fontdb::FaceInfo, u16)> = None;
     for face in db.faces() {
         if !face
@@ -58,7 +64,7 @@ fn find_face(db: &fontdb::Database, family: &str, weight: u16, exact: bool) -> O
         {
             continue;
         }
-        if face.style != fontdb::Style::Normal || face.stretch != fontdb::Stretch::Normal {
+        if (face.style != fontdb::Style::Normal) != italic || face.stretch != fontdb::Stretch::Normal {
             continue;
         }
         if let fontdb::Source::File(p) | fontdb::Source::SharedFile(p, _) = &face.source {
@@ -190,4 +196,111 @@ pub fn install(ctx: &egui::Context) -> String {
 
     ctx.set_fonts(fonts);
     used
+}
+
+// ------------------------------------------------------------------ export
+
+/// CJK and symbol fonts tried, in order, for characters the text font lacks
+/// when a message is saved as a PDF.
+const EXPORT_FALLBACK_FAMILIES: &[&str] = &[
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Droid Sans Fallback",
+    "WenQuanYi Zen Hei",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Hiragino Sans",
+    "Yu Gothic",
+    "Malgun Gothic",
+    "Arial Unicode MS",
+];
+
+/// A font file and the face inside it.
+#[derive(Clone)]
+pub struct FaceData {
+    pub data: Arc<Vec<u8>>,
+    pub index: u32,
+}
+
+impl From<Face> for FaceData {
+    fn from(f: Face) -> Self {
+        FaceData {
+            data: Arc::new(f.data),
+            index: f.index,
+        }
+    }
+}
+
+/// Fonts for documents written to disk (PDF export). A missing style is
+/// `None` and synthesised by the exporter.
+pub struct ExportFonts {
+    pub regular: FaceData,
+    pub bold: Option<FaceData>,
+    pub italic: Option<FaceData>,
+    pub bold_italic: Option<FaceData>,
+    pub mono: FaceData,
+    /// Tried in order for characters the fonts above don't have.
+    pub fallbacks: Vec<FaceData>,
+}
+
+fn bundled(defs: &FontDefinitions, name: &str) -> Option<FaceData> {
+    defs.font_data.get(name).map(|d| FaceData {
+        data: Arc::new(d.font.to_vec()),
+        index: d.index,
+    })
+}
+
+impl ExportFonts {
+    /// Only the fonts shipped inside the app: the same on every computer.
+    pub fn bundled() -> ExportFonts {
+        let defs = FontDefinitions::default();
+        let regular = bundled(&defs, "Ubuntu-Light").expect("bundled text font");
+        ExportFonts {
+            mono: bundled(&defs, "Hack").unwrap_or_else(|| regular.clone()),
+            fallbacks: ["NotoEmoji-Regular", "emoji-icon-font"]
+                .iter()
+                .filter_map(|n| bundled(&defs, n))
+                .collect(),
+            regular,
+            bold: None,
+            italic: None,
+            bold_italic: None,
+        }
+    }
+
+    /// The system's UI font family (the one the app itself uses) with the
+    /// bundled fonts and a CJK font as fallbacks.
+    pub fn system() -> ExportFonts {
+        let mut fonts = ExportFonts::bundled();
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        for fam in UI_FAMILIES {
+            if let Some(reg) = find_face(&db, fam, 400, true) {
+                // The bundled text font still covers what this family lacks.
+                let previous = std::mem::replace(&mut fonts.regular, reg.into());
+                fonts.fallbacks.insert(0, previous);
+                fonts.bold = find_face(&db, fam, 700, true)
+                    .or_else(|| find_face(&db, fam, 600, true))
+                    .map(Into::into);
+                fonts.italic = find_face_styled(&db, fam, 400, true, true).map(Into::into);
+                fonts.bold_italic = find_face_styled(&db, fam, 700, true, true)
+                    .or_else(|| find_face_styled(&db, fam, 600, true, true))
+                    .map(Into::into);
+                break;
+            }
+        }
+        for fam in MONO_FAMILIES {
+            if let Some(face) = find_face(&db, fam, 400, true) {
+                fonts.mono = face.into();
+                break;
+            }
+        }
+        for fam in EXPORT_FALLBACK_FAMILIES {
+            if let Some(face) = find_face(&db, fam, 400, false) {
+                fonts.fallbacks.push(face.into());
+                break;
+            }
+        }
+        fonts
+    }
 }
