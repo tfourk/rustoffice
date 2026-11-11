@@ -52,6 +52,10 @@ stored in a private file (mode 0600) in the data folder.
   snooze, sweep, junk / not junk, block sender, unified "All inboxes".
 - Virtualised message list grouped by date, hover actions, multi-select
   (Ctrl/Shift-click or the round check boxes), drag messages onto folders, context menus.
+- **Drag messages into other programs** (Windows): drag one or more messages out of the
+  window and drop them on another program or a folder; they arrive as `.eml` files named
+  after their subjects. That files an e-mail with a customer in an accounting program
+  such as QuickBooks, attaches it to a document, or saves it to a folder, in one motion.
 - **Reading pane** right, bottom or off; threaded conversation cards, safe HTML rendering
   (no scripts, remote images blocked until you allow them, tracking pixels dropped, dark
   mode colour adaptation), inline images, attachments (open / save / save all), meeting
@@ -317,6 +321,10 @@ start-up and exit (useful for visual checks in CI).
   CalDAV/CardDAV or Exchange sync yet. Times in invitations that use a named time zone
   are read as local time.
 - POP3 is not supported.
+- Dragging messages into other programs works on Windows only for now; on Linux and
+  macOS use **Save as .eml…** from a message's menu. The drag becomes a file drag when the
+  pointer leaves the RustMail window, so with a maximized window drag onto the taskbar
+  button of the other program (or make the window smaller).
 - An imported Outlook mailbox stays on this computer: its mail is not uploaded to your
   mail server, and mail can't be sent from it (replies go out from one of your accounts).
   Not carried over: distribution lists, journal entries, rules and signatures, changes

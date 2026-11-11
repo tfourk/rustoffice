@@ -115,6 +115,9 @@ pub struct App {
     pub settings: Option<SettingsState>,
     pub wizard: Option<WizardState>,
     pub dialog: Option<Dialog>,
+    /// A drag was handed to the system, which swallowed the mouse release:
+    /// tell egui the button is up (see `raw_input_hook`).
+    release_pointer: bool,
     /// An import from an Outlook data file, running or just finished.
     pub outlook: Option<crate::ui::outlook_import::OutlookImport>,
     pub search: String,
@@ -143,6 +146,7 @@ impl App {
 
         let (mut cfg, cfg_error) = AppConfig::load();
         let paths = Paths::get();
+        crate::dragout::clean(&paths.data_dir);
         let store = Store::open(&paths.db_file()).unwrap_or_else(|e| {
             log::error!("could not open database {:?}: {e}", paths.db_file());
             Store::open(&std::env::temp_dir().join("rustmail-fallback.db"))
@@ -181,6 +185,7 @@ impl App {
             settings: None,
             wizard: None,
             dialog: None,
+            release_pointer: false,
             outlook: None,
             search: String::new(),
             focus_search: false,
@@ -776,7 +781,20 @@ impl eframe::App for App {
         }
         self.shortcuts(&ctx);
         self.draw(ui);
+        self.drag_out(&ctx);
         self.screenshot_hook(&ctx);
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if std::mem::take(&mut self.release_pointer) {
+            raw_input.events.push(egui::Event::PointerButton {
+                pos: egui::Pos2::new(-1.0, -1.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            });
+            raw_input.events.push(egui::Event::PointerGone);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -790,6 +808,49 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Messages dragged past the edge of the window leave the app: they
+    /// are handed to the system as `.eml` files, to be dropped on another
+    /// program.
+    fn drag_out(&mut self, ctx: &egui::Context) {
+        if !crate::dragout::supported() {
+            return;
+        }
+        let Some(payload) = egui::DragAndDrop::payload::<crate::ui::mail::DragMsgs>(ctx) else { return };
+        let window = ctx.content_rect();
+        let outside = ctx.input(|i| i.pointer.latest_pos()).is_none_or(|pos| !window.shrink(1.0).contains(pos));
+        if !outside {
+            return;
+        }
+        // From here on the drag belongs to the system.
+        egui::DragAndDrop::clear_payload(ctx);
+        self.release_pointer = true;
+        ctx.request_repaint();
+        let dir = crate::dragout::folder(&crate::config::Paths::get().data_dir);
+        let exported = match crate::dragout::export(&self.store, &payload.0, &dir) {
+            Ok(e) => e,
+            Err(e) => {
+                self.toast(format!("Couldn't prepare the messages: {e}"), ToastKind::Error);
+                return;
+            }
+        };
+        for id in &exported.missing {
+            self.engine.send(Command::FetchBody { msg_id: *id });
+        }
+        if exported.files.is_empty() {
+            self.toast("Still downloading the message, try again in a moment", ToastKind::Info);
+            return;
+        }
+        if !exported.missing.is_empty() {
+            self.toast(format!("{} message(s) are still downloading and were left out", exported.missing.len()), ToastKind::Info);
+        }
+        match crate::dragout::start(&exported.files) {
+            Ok(dropped) => log::info!("dragged {} message(s) out of the window; dropped: {dropped}", exported.files.len()),
+            Err(e) => {
+                self.toast(format!("Couldn't start the drag: {e}"), ToastKind::Error);
+            }
+        }
+    }
+
     fn startup_actions(&mut self, _ctx: &egui::Context) {
         if self.frame == 1 {
             if self.start.open_first {

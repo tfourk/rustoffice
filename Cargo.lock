@@ -4313,6 +4313,8 @@ dependencies = [
  "ureq",
  "uuid",
  "webpki-roots",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

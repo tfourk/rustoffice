@@ -4,6 +4,7 @@ mod app;
 mod cal;
 mod config;
 mod demo;
+mod dragout;
 mod engine;
 mod fonts;
 mod icons;
