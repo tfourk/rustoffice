@@ -60,12 +60,14 @@ stored in a private file (mode 0600) in the data folder.
   (no scripts, remote images blocked until you allow them, tracking pixels dropped, dark
   mode colour adaptation), inline images, attachments (open / save / save all), meeting
   invitations with **Accept / Tentative / Decline** (sends an iMIP reply), read-receipt
-  requests, one-click unsubscribe, view source, save as `.eml` or **PDF**.
-- **Save as PDF** (right-click a message, or its **…** menu): the subject, people, date
-  and attachment list followed by the message as it reads in the app. Text can be
-  selected and searched, links stay clickable and inline images are included; remote
-  images are never downloaded (their description is printed instead). Pages are Letter
-  in the Americas and A4 elsewhere.
+  requests, one-click unsubscribe, view source, save as a file in several formats.
+- **Save as** (right-click a message, or its **…** menu) writes a message as an e-mail
+  file (`.eml`), **PDF**, **Word document** (`.docx`), **web page** (`.html`, a single
+  file with its pictures inside), **plain text** or **Markdown**. Each starts with the
+  subject, people, date and attachment list, followed by the message as it reads in the
+  app: headings, lists, quotes, links and inline images carry over (as far as the format
+  has them). Remote images are never downloaded; their description is written instead.
+  PDF and Word pages are Letter in the Americas and A4 elsewhere.
 - **Compose** inline or in its own window: recipient "pills" with contact
   auto-complete, Cc/Bcc, formatting toolbar (Markdown → HTML, with live preview; a
   plain-text part is always included), attachments (button or drag-and-drop), importance,
@@ -311,6 +313,7 @@ start-up and exit (useful for visual checks in CI).
 | `src/store.rs` | SQLite cache with FTS5 search, contacts, events, tasks, outbox |
 | `src/mime.rs` | Parsing (`mail-parser`) and building (`lettre`) messages |
 | `src/pdf.rs` | Saving a message as a PDF (`krilla`, shaping with `rustybuzz`) |
+| `src/export.rs` | Saving a message as a Word document, web page, plain text or Markdown |
 | `src/cal.rs`, `src/vcard.rs` | iCalendar and vCard |
 | `src/outlook/` | Import of Outlook `.pst` / `.ost` files: reading (`outlook-pst`), conversion to mail, contacts, events and tasks, compressed RTF bodies |
 | `src/demo.rs` | The offline demo mailbox |
@@ -322,7 +325,7 @@ start-up and exit (useful for visual checks in CI).
   are read as local time.
 - POP3 is not supported.
 - Dragging messages into other programs works on Windows only for now; on Linux and
-  macOS use **Save as .eml…** from a message's menu. The drag becomes a file drag when the
+  macOS use **Save as → E-mail file** in a message's menu. The drag becomes a file drag when the
   pointer leaves the RustMail window, so with a maximized window drag onto the taskbar
   button of the other program (or make the window smaller).
 - An imported Outlook mailbox stays on this computer: its mail is not uploaded to your
