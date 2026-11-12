@@ -325,7 +325,7 @@ start-up and exit (useful for visual checks in CI).
   are read as local time.
 - POP3 is not supported.
 - Dragging messages into other programs works on Windows only for now; on Linux and
-  macOS use **Save as .eml…** from a message's menu. The drag becomes a file drag when the
+  macOS use **Save as → E-mail file** in a message's menu. The drag becomes a file drag when the
   pointer leaves the RustMail window, so with a maximized window drag onto the taskbar
   button of the other program (or make the window smaller).
 - An imported Outlook mailbox stays on this computer: its mail is not uploaded to your
