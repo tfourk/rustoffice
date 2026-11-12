@@ -6,6 +6,7 @@ mod config;
 mod demo;
 mod dragout;
 mod engine;
+mod export;
 mod fonts;
 mod icons;
 mod mime;

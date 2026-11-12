@@ -38,7 +38,7 @@ const HEADER_LABEL_W: f32 = 72.0;
 /// Slant of synthesised italics (x shift per unit of height).
 const SKEW: f32 = 0.2;
 
-type Rgb = [u8; 3];
+pub(crate) type Rgb = [u8; 3];
 const TEXT: Rgb = [0x24, 0x24, 0x24];
 const MUTED: Rgb = [0x61, 0x61, 0x61];
 const LINK: Rgb = [0x0F, 0x6C, 0xBD];
@@ -108,6 +108,12 @@ pub fn message_pdf(raw: &[u8], subject: Option<&str>, date: Option<i64>, size: P
 }
 
 pub fn message_pdf_with(raw: &[u8], subject: Option<&str>, date: Option<i64>, size: PageSize, fonts: &ExportFonts) -> Result<Vec<u8>> {
+    with_message(raw, subject, date, |msg| render_with(msg, size, fonts))
+}
+
+/// Reads a raw message into the form the exporters work from (header
+/// fields, body blocks, the images it carries) and hands it to `f`.
+pub fn with_message<T>(raw: &[u8], subject: Option<&str>, date: Option<i64>, f: impl FnOnce(&PdfMessage) -> Result<T>) -> Result<T> {
     let parsed = crate::mime::parse_full(raw).ok_or_else(|| anyhow!("the message could not be read"))?;
     let doc = match &parsed.html {
         Some(h) => crate::ui::html::parse_html(h),
@@ -128,7 +134,7 @@ pub fn message_pdf_with(raw: &[u8], subject: Option<&str>, date: Option<i64>, si
         images: collect_images(raw, &doc),
         doc: &doc,
     };
-    render_with(&msg, size, fonts)
+    f(&msg)
 }
 
 pub fn render_with(msg: &PdfMessage, size: PageSize, fonts: &ExportFonts) -> Result<Vec<u8>> {
@@ -339,7 +345,7 @@ fn rgb_of(c: Color32) -> Rgb {
 }
 
 /// Links worth keeping in a document that is read outside the app.
-fn external_link(url: &str) -> Option<String> {
+pub(crate) fn external_link(url: &str) -> Option<String> {
     let lower = url.trim().to_ascii_lowercase();
     ["http://", "https://", "mailto:", "tel:"]
         .iter()
@@ -349,7 +355,7 @@ fn external_link(url: &str) -> Option<String> {
 
 /// The light-theme colours of a run, as the reading pane picks them: text
 /// stays readable whatever the e-mail asked for.
-fn colors(style: &RunStyle) -> (Rgb, Option<Rgb>) {
+pub(crate) fn colors(style: &RunStyle) -> (Rgb, Option<Rgb>) {
     let bg = style.bg.filter(|b| luminance(*b) < 0.72 || saturation(*b) > 0.45);
     let dark_bg = bg.map(|b| luminance(b) < 0.5).unwrap_or(false);
     let mut fg = match style.color {

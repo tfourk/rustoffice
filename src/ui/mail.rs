@@ -108,7 +108,7 @@ pub enum MenuCmd {
     AlwaysFocused(bool),
     ViewSource,
     SaveEml,
-    SavePdf,
+    SaveAs(crate::export::Format),
     EditDraft,
     OpenFull,
 }
@@ -1422,12 +1422,24 @@ impl App {
         if widgets::menu_item(ui, icons::CODE, "View message source").clicked() {
             out.push(MenuCmd::ViewSource);
         }
-        if widgets::menu_item(ui, icons::DOWNLOAD_SIMPLE, "Save as .eml…").clicked() {
-            out.push(MenuCmd::SaveEml);
-        }
-        if widgets::menu_item(ui, icons::FILE_PDF, "Save as PDF…").clicked() {
-            out.push(MenuCmd::SavePdf);
-        }
+        ui.menu_button(format!("{}   Save as", icons::DOWNLOAD_SIMPLE), |ui| {
+            use crate::export::Format;
+            if widgets::menu_item(ui, icons::ENVELOPE_SIMPLE, "E-mail file (.eml)…").clicked() {
+                out.push(MenuCmd::SaveEml);
+            }
+            for format in Format::ALL {
+                let icon = match format {
+                    Format::Pdf => icons::FILE_PDF,
+                    Format::Word => icons::FILE_DOC,
+                    Format::Html => icons::FILE_HTML,
+                    Format::Text => icons::FILE_TEXT,
+                    Format::Markdown => icons::FILE_MD,
+                };
+                if widgets::menu_item(ui, icon, &format!("{} (.{})…", format.label(), format.extension())).clicked() {
+                    out.push(MenuCmd::SaveAs(format));
+                }
+            }
+        });
     }
 
     fn category_items(&self, ui: &mut Ui, current: &[String], out: &mut Vec<MenuCmd>) {
@@ -1590,7 +1602,7 @@ impl App {
                 }
             }
             MenuCmd::SaveEml => self.save_eml(ids[0]),
-            MenuCmd::SavePdf => self.save_pdf(ids[0]),
+            MenuCmd::SaveAs(format) => self.save_as(ids[0], format),
             MenuCmd::EditDraft => self.edit_draft(ids[0]),
             MenuCmd::OpenFull => self.open_message_full(ids[0]),
         }
@@ -2111,8 +2123,8 @@ impl App {
         }
     }
 
-    /// Writes the message (header block and body) to a PDF file.
-    fn save_pdf(&mut self, id: MsgId) {
+    /// Writes the message (header block and body) to a file in `format`.
+    fn save_as(&mut self, id: MsgId, format: crate::export::Format) {
         let Ok(Some(raw)) = self.store.raw_body(id) else {
             self.engine.send(Command::FetchBody { msg_id: id });
             self.toast("Downloading message… try again in a moment", ToastKind::Info);
@@ -2120,12 +2132,11 @@ impl App {
         };
         let summary = self.store.message(id).ok().flatten();
         let subject = summary.as_ref().map(|m| m.subject.clone()).unwrap_or_default();
-        let name = format!("{}.pdf", util::sanitize_filename(if subject.is_empty() { "message" } else { &subject }));
-        let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter("PDF", &["pdf"]).save_file() else {
+        let name = format!("{}.{}", util::sanitize_filename(if subject.is_empty() { "message" } else { &subject }), format.extension());
+        let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter(format.label(), &[format.extension()]).save_file() else {
             return;
         };
-        let result = crate::pdf::message_pdf(&raw, Some(&subject), summary.map(|m| m.date), crate::pdf::PageSize::for_region())
-            .and_then(|bytes| Ok(std::fs::write(&path, bytes)?));
+        let result = crate::export::export(format, &raw, Some(&subject), summary.map(|m| m.date)).and_then(|bytes| Ok(std::fs::write(&path, bytes)?));
         match result {
             Ok(()) => self.toast(format!("Saved {}", path.display()), ToastKind::Success),
             Err(e) => self.toast(format!("Could not save: {e}"), ToastKind::Error),
