@@ -4283,6 +4283,7 @@ dependencies = [
  "fontdb",
  "futures",
  "hickory-resolver",
+ "hostname",
  "html-escape",
  "iana-time-zone",
  "image",

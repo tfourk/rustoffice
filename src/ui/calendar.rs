@@ -953,6 +953,7 @@ impl App {
                 .fill(p.card)
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::same(22))
+                .stroke(crate::theme::window_stroke())
                 .shadow(crate::theme::window_shadow()),
         );
         let resp = modal.show(ctx, |ui| {

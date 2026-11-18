@@ -1,5 +1,6 @@
 //! System font discovery. We look for a Segoe-UI-like humanist sans in
 //! regular / semibold / bold weights and fall back to egui's bundled fonts.
+//! The Terminal theme uses a monospace family for all text instead.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -93,21 +94,31 @@ fn insert(fonts: &mut FontDefinitions, key: &str, face: Face) {
     fonts.font_data.insert(key.to_owned(), fd.into());
 }
 
-/// Installs fonts into the context and returns the name of the UI family used.
-pub fn install(ctx: &egui::Context) -> String {
+/// Installs fonts into the context and returns the name of the UI family
+/// used. With `terminal`, every text style uses a monospace family.
+pub fn install(ctx: &egui::Context, terminal: bool) -> String {
     let mut fonts = FontDefinitions::default();
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
     let mut used = String::from("egui default");
     let mut ui_regular = None;
-    for fam in UI_FAMILIES {
+    for fam in if terminal { MONO_FAMILIES } else { UI_FAMILIES } {
         if let Some(reg) = find_face(&db, fam, 400, true) {
             let semi = find_face(&db, fam, 600, true).or_else(|| find_face(&db, fam, 700, true));
             let bold = find_face(&db, fam, 700, true);
             used = fam.to_string();
             ui_regular = Some((reg, semi, bold));
             break;
+        }
+    }
+    if terminal && ui_regular.is_none() {
+        // No monospace family on the system: egui's bundled one. The
+        // semibold and bold families below start from this list too.
+        used = String::from("Hack (built in)");
+        let hack = fonts.families.get(&FontFamily::Monospace).and_then(|m| m.first().cloned());
+        if let Some(hack) = hack {
+            fonts.families.entry(FontFamily::Proportional).or_default().insert(0, hack);
         }
     }
 

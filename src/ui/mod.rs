@@ -8,6 +8,7 @@ pub mod outlook_import;
 pub mod people;
 pub mod settings;
 pub mod shell;
+pub mod terminal;
 pub mod todo;
 pub mod widgets;
 pub mod wizard;

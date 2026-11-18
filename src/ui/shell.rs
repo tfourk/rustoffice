@@ -24,24 +24,37 @@ impl App {
             self.window_resize_borders(&ctx);
         }
 
-        egui::Panel::top("titlebar")
-            .exact_size(48.0)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(Frame::NONE.fill(p.bg))
-            .show(ui, |ui| self.titlebar(ui));
+        let bar = |id: &'static str, top: bool, height: f32| {
+            let panel = if top { egui::Panel::top(id) } else { egui::Panel::bottom(id) };
+            panel.exact_size(height).resizable(false).show_separator_line(false).frame(Frame::NONE.fill(p.bg))
+        };
+        let title = bar("titlebar", true, 48.0).show(ui, |ui| self.titlebar(ui));
+        // The Terminal theme has full-width lines above and below the
+        // panes, divided by box lines.
+        let mut rules = Vec::new();
+        if p.term {
+            rules.push(title.response.rect.bottom());
+            let info = bar("terminfo", true, 30.0).show(ui, |ui| self.term_info_bar(ui));
+            rules.push(info.response.rect.bottom());
+            let status = bar("statusbar", false, 30.0).show(ui, |ui| self.term_status_line(ui));
+            rules.push(status.response.rect.top());
+            let keys = bar("keybar", false, 34.0).show(ui, |ui| self.term_key_bar(ui));
+            rules.push(keys.response.rect.top());
+        }
         egui::Panel::left("appbar")
             .exact_size(56.0)
             .resizable(false)
             .show_separator_line(false)
             .frame(Frame::NONE.fill(p.bg))
             .show(ui, |ui| self.app_bar(ui));
-        egui::Panel::bottom("statusbar")
-            .exact_size(26.0)
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(Frame::NONE.fill(p.bg).inner_margin(Margin::symmetric(8, 0)))
-            .show(ui, |ui| self.status_bar(ui));
+        if !p.term {
+            egui::Panel::bottom("statusbar")
+                .exact_size(26.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::NONE.fill(p.bg).inner_margin(Margin::symmetric(8, 0)))
+                .show(ui, |ui| self.status_bar(ui));
+        }
         let slim = self.cfg.appearance.slim;
         egui::Panel::top("ribbon")
             .exact_size(if slim { 48.0 } else { 88.0 })
@@ -60,6 +73,9 @@ impl App {
             Module::People => self.people_ui(ui),
             Module::Todo => self.todo_ui(ui),
         });
+        if p.term {
+            self.term_frame(ui, &rules);
+        }
 
         self.compose_windows(&ctx);
         self.dialogs(&ctx);
@@ -122,8 +138,12 @@ impl App {
         }
 
         // Left: logo + name.
-        let left = Rect::from_min_size(rect.min + vec2(12.0, 0.0), vec2(220.0, rect.height()));
+        let left = Rect::from_min_size(rect.min + vec2(12.0, 0.0), vec2(if p.term { 290.0 } else { 220.0 }, rect.height()));
         ui.scope_builder(UiBuilder::new().max_rect(left).layout(Layout::left_to_right(Align::Center)), |ui| {
+            if p.term {
+                self.term_title(ui);
+                return;
+            }
             let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
             ui.painter().rect_filled(r, CornerRadius::same(6), p.accent);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(17.0), Color32::WHITE);
@@ -131,9 +151,10 @@ impl App {
             ui.label(RichText::new("RustMail").font(font_semibold(15.0)).color(p.text));
         });
 
-        // Center: search.
-        let sw = (rect.width() - 2.0 * 300.0).clamp(240.0, 600.0);
-        let search_rect = Rect::from_center_size(rect.center(), vec2(sw, 32.0));
+        // Center: search. The Terminal theme's longer title moves it right.
+        let side = if p.term { 320.0 } else { 300.0 };
+        let sw = (rect.width() - 2.0 * side).clamp(240.0, 600.0);
+        let search_rect = Rect::from_center_size(rect.center() + vec2(if p.term { 20.0 } else { 0.0 }, 0.0), vec2(sw, 32.0));
         let search_id = Id::new("global-search");
         let before = self.search.clone();
         ui.scope_builder(UiBuilder::new().max_rect(search_rect), |ui| {
@@ -230,6 +251,9 @@ impl App {
                     }
                 }
             }
+            if p.term {
+                self.term_title_version(ui);
+            }
         });
     }
 
@@ -284,21 +308,36 @@ impl App {
             let selected = self.module == module;
             let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 50.0), Sense::click());
             let inner = Rect::from_center_size(rect.center(), vec2(44.0, 44.0));
-            if resp.hovered() || selected {
-                ui.painter().rect_filled(inner, CornerRadius::same(6), if selected { p.card } else { p.hover });
+            if p.term {
+                // A green block for the open module, like the folder list.
+                if selected {
+                    ui.painter().rect_filled(inner, CornerRadius::ZERO, p.accent);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(inner, CornerRadius::ZERO, p.hover);
+                }
+                ui.painter().text(inner.center(), Align2::CENTER_CENTER, icon, icon_font(21.0), if selected { p.on_accent } else { p.text2 });
+                if module == Module::Mail && unread > 0 {
+                    let txt = if unread > 99 { "99+".to_string() } else { unread.to_string() };
+                    let color = if selected { p.on_accent } else { p.yellow };
+                    ui.painter().text(inner.right_top() + vec2(-3.0, 2.0), Align2::RIGHT_TOP, txt, font_semibold(11.5), color);
+                }
+            } else {
+                if resp.hovered() || selected {
+                    ui.painter().rect_filled(inner, CornerRadius::same(6), if selected { p.card } else { p.hover });
+                }
+                if selected {
+                    let bar = Rect::from_center_size(Pos2::new(rect.left() + 3.0, rect.center().y), vec2(3.0, 20.0));
+                    ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+                }
+                ui.painter().text(
+                    inner.center(),
+                    Align2::CENTER_CENTER,
+                    icon,
+                    if selected { icon_fill_font(22.0) } else { icon_font(22.0) },
+                    if selected { p.accent } else { p.text2 },
+                );
             }
-            if selected {
-                let bar = Rect::from_center_size(Pos2::new(rect.left() + 3.0, rect.center().y), vec2(3.0, 20.0));
-                ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
-            }
-            ui.painter().text(
-                inner.center(),
-                Align2::CENTER_CENTER,
-                icon,
-                if selected { icon_fill_font(22.0) } else { icon_font(22.0) },
-                if selected { p.accent } else { p.text2 },
-            );
-            if module == Module::Mail && unread > 0 {
+            if module == Module::Mail && unread > 0 && !p.term {
                 let c = Pos2::new(inner.right() - 9.0, inner.top() + 10.0);
                 let txt = if unread > 99 { "99+".to_string() } else { unread.to_string() };
                 let g = ui.painter().layout_no_wrap(txt, font_semibold(10.0), Color32::WHITE);
@@ -741,38 +780,50 @@ impl App {
 
     // ------------------------------------------------------------- status bar
 
+    /// What the status bar says about syncing, across all accounts.
+    pub fn sync_summary(&self) -> SyncSummary {
+        let mut s = SyncSummary {
+            text: "All folders are up to date.".to_string(),
+            icon: icons::CHECK_CIRCLE,
+            busy: false,
+            error: false,
+            last: 0,
+        };
+        for (id, status) in &self.statuses {
+            match status {
+                SyncStatus::Syncing(msg) => {
+                    s.text = format!("{} — {msg}", self.account_name(id));
+                    s.busy = true;
+                }
+                SyncStatus::Connecting if !s.busy => {
+                    s.text = format!("Connecting to {}…", self.account_name(id));
+                    s.busy = true;
+                }
+                SyncStatus::Error(e) if !s.busy => {
+                    s.text = format!("{}: {}", self.account_name(id), util::truncate_chars(e, 90));
+                    s.icon = icons::WARNING;
+                    s.error = true;
+                }
+                SyncStatus::Idle { last: l } => s.last = s.last.max(*l),
+                _ => {}
+            }
+        }
+        // Syncing outranks an error from another account.
+        s.error &= !s.busy;
+        if self.cfg.accounts.is_empty() {
+            s.text = "No accounts yet — add one to start syncing.".into();
+            s.icon = icons::INFO;
+        }
+        s
+    }
+
     fn status_bar(&mut self, ui: &mut Ui) {
         let p = pal();
+        let summary = self.sync_summary();
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let mut text = "All folders are up to date.".to_string();
-            let mut icon = icons::CHECK_CIRCLE;
-            let mut color = p.text3;
-            let mut busy = false;
-            let mut last = 0;
-            for (id, s) in &self.statuses {
-                match s {
-                    SyncStatus::Syncing(msg) => {
-                        text = format!("{} — {msg}", self.account_name(id));
-                        busy = true;
-                    }
-                    SyncStatus::Connecting if !busy => {
-                        text = format!("Connecting to {}…", self.account_name(id));
-                        busy = true;
-                    }
-                    SyncStatus::Error(e) if !busy => {
-                        text = format!("{}: {}", self.account_name(id), util::truncate_chars(e, 90));
-                        icon = icons::WARNING;
-                        color = p.danger;
-                    }
-                    SyncStatus::Idle { last: l } => last = last.max(*l),
-                    _ => {}
-                }
-            }
-            if self.cfg.accounts.is_empty() {
-                text = "No accounts yet — add one to start syncing.".into();
-                icon = icons::INFO;
-            }
+            let SyncSummary { text, icon, busy, last, .. } = summary;
+            let color = if summary.error { p.danger } else { p.text3 };
             if busy {
                 ui.add(egui::Spinner::new().size(12.0).color(p.accent));
             } else {
@@ -832,11 +883,12 @@ impl App {
                     Frame::NONE
                         .fill(if p.dark { p.card_alt } else { theme::hex(0x292929) })
                         .corner_radius(CornerRadius::same(8))
+                        .stroke(theme::window_stroke())
                         .shadow(egui::Shadow {
                             offset: [0, 4],
                             blur: 16,
                             spread: 0,
-                            color: Color32::from_black_alpha(60),
+                            color: Color32::from_black_alpha(if p.term { 0 } else { 60 }),
                         })
                         .inner_margin(Margin::symmetric(14, 10))
                         .show(ui, |ui| {
@@ -930,6 +982,7 @@ impl App {
                 .fill(p.card)
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::same(24))
+                .stroke(crate::theme::window_stroke())
                 .shadow(crate::theme::window_shadow()),
         );
         let resp = modal.show(ctx, |ui| {
@@ -1180,6 +1233,17 @@ impl App {
     }
 }
 
+/// The sync state shown in the status bar.
+pub struct SyncSummary {
+    pub text: String,
+    pub icon: &'static str,
+    pub busy: bool,
+    /// The text is an account's error.
+    pub error: bool,
+    /// When the most recent sync finished (0 if never).
+    pub last: i64,
+}
+
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+N", "New message / event / contact / task"),
     ("Ctrl+R", "Reply"),
@@ -1201,5 +1265,6 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("F9", "Send / receive all folders"),
     ("Ctrl+1 … Ctrl+4", "Mail, Calendar, People, To Do"),
     ("Ctrl+,", "Settings"),
+    ("F1", "Keyboard shortcuts"),
     ("Ctrl + / Ctrl − / Ctrl+0", "Zoom in / out / reset"),
 ];
