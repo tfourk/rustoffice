@@ -16,7 +16,8 @@ pub enum ThemeMode {
     Light,
     Dark,
     /// Monospace text, square boxes and terminal colours, as if the app
-    /// were running in a terminal window.
+    /// were running in a terminal window. Inspired by BS-Mail by IronWolve
+    /// (<https://github.com/IronWolve/BS-Mail>).
     Terminal,
 }
 
@@ -265,6 +266,8 @@ impl Palette {
     /// The Terminal theme: a near-black screen with cyan box lines, green
     /// headings, yellow counts, magenta tags and a blue selection bar. It
     /// has its own colours, so the accent colour setting doesn't apply.
+    /// The look was inspired by BS-Mail by IronWolve; no BS-Mail code or
+    /// files are used.
     pub fn terminal() -> Self {
         let bg = hex(0x03080F);
         let green = hex(0x66E655);
