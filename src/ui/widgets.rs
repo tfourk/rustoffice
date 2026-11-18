@@ -46,6 +46,84 @@ pub fn paint_gradient(painter: &egui::Painter, rect: Rect, stops: &[Color32], ve
     painter.add(mesh);
 }
 
+/// Like a left-to-right [`paint_gradient`], but each evenly spaced column
+/// has its own colour at the top and at the bottom.
+pub fn paint_gradient_rows(painter: &egui::Painter, rect: Rect, top: &[Color32], bottom: &[Color32]) {
+    let n = top.len().min(bottom.len());
+    if n < 2 {
+        return;
+    }
+    let mut mesh = egui::Mesh::default();
+    for i in 0..n {
+        let x = egui::lerp(rect.x_range(), i as f32 / (n - 1) as f32);
+        mesh.colored_vertex(Pos2::new(x, rect.top()), top[i]);
+        mesh.colored_vertex(Pos2::new(x, rect.bottom()), bottom[i]);
+    }
+    for i in 0..(n - 1) as u32 {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 3, k + 2);
+    }
+    painter.add(mesh);
+}
+
+/// Neon Sunset's striped retro sun: a disc fading from gold through
+/// orange to pink, crossed by three bands of `band` colour.
+pub fn paint_sun(painter: &egui::Painter, c: Pos2, radius: f32, band: Color32) {
+    use theme::sunset;
+    // A plain disc underneath gives the gradient an anti-aliased edge.
+    painter.circle_filled(c, radius, sunset::ORANGE);
+    let r = radius - 0.5;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(c, sunset::ORANGE);
+    const RIM: u32 = 24;
+    for i in 0..RIM {
+        let a = i as f32 / RIM as f32 * std::f32::consts::TAU;
+        let pos = c + vec2(a.cos(), a.sin()) * r;
+        mesh.colored_vertex(pos, sunset::sun_at((pos.y - (c.y - r)) / (2.0 * r)));
+    }
+    for i in 1..=RIM {
+        mesh.add_triangle(0, i, i % RIM + 1);
+    }
+    painter.add(mesh);
+    for (at, height) in [(0.23, 1.0), (0.5, 1.5), (0.77, 2.0)] {
+        let y = c.y + at * radius;
+        let band_rect = Rect::from_min_max(Pos2::new(c.x - radius - 1.0, y - height / 2.0), Pos2::new(c.x + radius + 1.0, y + height / 2.0));
+        painter.rect_filled(band_rect, CornerRadius::ZERO, band);
+    }
+}
+
+/// Fills an accent-coloured mark (a primary button, a selected tab's
+/// underline, a toggle, a badge). Neon Sunset fades it from pink into
+/// sunset orange; other themes fill it with the plain accent colour.
+pub fn accent_fill(painter: &egui::Painter, rect: Rect, radius: u8, hovered: bool, pressed: bool) {
+    use theme::{sunset, Skin};
+    let p = pal();
+    let (a, b) = if pressed {
+        (p.accent_pressed, sunset::PRESSED_END)
+    } else if hovered {
+        (p.accent_hover, sunset::HOVER_END)
+    } else {
+        (p.accent, sunset::ORANGE)
+    };
+    let r = radius as f32;
+    if p.skin != Skin::NeonSunset || rect.width() <= 2.0 * r + 2.0 {
+        painter.rect_filled(rect, CornerRadius::same(radius), a);
+        return;
+    }
+    if radius <= 2 {
+        paint_gradient(painter, rect, &[a, b], false);
+        return;
+    }
+    // Meshes have no anti-aliasing: keep egui's rounded ends, the left in
+    // the start colour and the right in the end colour, with the gradient
+    // across the straight middle.
+    painter.rect_filled(rect, CornerRadius::same(radius), b);
+    let left = Rect::from_min_size(rect.min, vec2(2.0 * r, rect.height()));
+    painter.rect_filled(left, CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 }, a);
+    paint_gradient(painter, rect.shrink2(vec2(r, 0.0)), &[a, b], false);
+}
+
 /// A round dot, or a square one in the Terminal theme.
 pub fn dot(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
     if pal().term {
@@ -248,16 +326,21 @@ pub fn primary_button_ex(ui: &mut Ui, icon: Option<&str>, label: &str, enabled: 
     let (rect, resp) = ui.allocate_exact_size(vec2(w.max(80.0), 32.0), if enabled { Sense::click() } else { Sense::hover() });
     let resp = if enabled { resp.on_hover_cursor(CursorIcon::PointingHand) } else { resp };
     if ui.is_rect_visible(rect) {
-        let bg = if !enabled {
-            p.disabled
-        } else if resp.is_pointer_button_down_on() {
-            p.accent_pressed
-        } else if resp.hovered() {
-            p.accent_hover
+        let (hovered, pressed) = (resp.hovered(), resp.is_pointer_button_down_on());
+        if !enabled {
+            ui.painter().rect_filled(rect, CornerRadius::same(4), p.disabled);
         } else {
-            p.accent
-        };
-        ui.painter().rect_filled(rect, CornerRadius::same(4), bg);
+            let glow = match p.skin {
+                theme::Skin::NeonSunset => Some(Color32::from_rgba_unmultiplied(0xFF, 0x4F, 0x9E, if hovered { 90 } else { 55 })),
+                theme::Skin::Cyberpunk if hovered => Some(with_alpha(p.accent, 70)),
+                _ => None,
+            };
+            if let Some(color) = glow {
+                let (offset, blur) = if p.skin == theme::Skin::NeonSunset { ([0, 2], if hovered { 16 } else { 10 }) } else { ([0, 0], 12) };
+                ui.painter().add(egui::Shadow { offset, blur, spread: 0, color }.as_shape(rect, CornerRadius::same(4)));
+            }
+            accent_fill(ui.painter(), rect, 4, hovered, pressed);
+        }
         let content_w = icon_w + galley.size().x;
         let mut x = rect.center().x - content_w / 2.0;
         if let Some(ic) = icon {
@@ -364,8 +447,8 @@ pub fn subtle_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
 /// Text link styled with the accent colour.
 pub fn link(ui: &mut Ui, text: &str) -> Response {
     let p = pal();
-    // Terminal links are cyan and always underlined.
-    let color = if p.term { p.cyan } else { p.accent_text };
+    // Terminal links are cyan and always underlined; Neon Sunset's are teal.
+    let color = if p.term || p.skin == theme::Skin::NeonSunset { p.cyan } else { p.accent_text };
     let resp = ui.add(
         egui::Label::new(RichText::new(text).color(color))
             .sense(Sense::click())
@@ -407,7 +490,7 @@ pub fn tabs(ui: &mut Ui, items: &[&str], selected: &mut usize, size: f32) -> boo
                     Pos2::new(rect.left() + 8.0, rect.bottom() - 3.0),
                     vec2(rect.width() - 16.0, 3.0),
                 );
-                ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+                accent_fill(ui.painter(), bar, 2, false, false);
             }
             if resp.clicked() && !is_sel {
                 *selected = i;
@@ -424,12 +507,22 @@ pub fn search_box(ui: &mut Ui, text: &mut String, hint: &str, width: f32, id: eg
     let height = 32.0;
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let focused = ui.memory(|m| m.has_focus(id));
+    // Neon Sunset and Cyberpunk light up the focused box in their own colour.
+    let focus = match p.skin {
+        theme::Skin::NeonSunset => Some((Color32::from_rgba_unmultiplied(0x52, 0xD9, 0xD1, 60), 0, p.cyan)),
+        theme::Skin::Cyberpunk => Some((with_alpha(p.cyan, 0x60), 1, p.cyan)),
+        _ => None,
+    };
+    if let (true, Some((glow, spread, _))) = (focused, focus) {
+        ui.painter().add(egui::Shadow { offset: [0, 0], blur: 10, spread, color: glow }.as_shape(rect, CornerRadius::same(6)));
+    }
+    let focus_color = focus.map_or(p.accent, |(_, _, c)| c);
     let fill = if focused { p.card } else if p.dark { p.card } else { mix(p.card, p.bg, 0.25) };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     ui.painter().rect_stroke(
         rect,
         CornerRadius::same(6),
-        Stroke::new(1.0, if focused { p.accent } else { p.stroke }),
+        Stroke::new(if focused && focus.is_some() { 1.5 } else { 1.0 }, if focused { focus_color } else { p.stroke }),
         StrokeKind::Inside,
     );
     ui.painter().text(
@@ -437,7 +530,7 @@ pub fn search_box(ui: &mut Ui, text: &mut String, hint: &str, width: f32, id: eg
         Align2::CENTER_CENTER,
         icons::MAGNIFYING_GLASS,
         icon_font(16.0),
-        if focused { p.accent_text } else { p.text2 },
+        if focused { focus.map_or(p.accent_text, |(_, _, c)| c) } else { p.text2 },
     );
     let has_text = !text.is_empty();
     let edit_rect = Rect::from_min_max(
@@ -488,13 +581,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
     }
     let t = ui.ctx().animate_bool_with_time(resp.id, *on, 0.12);
     let radius = rect.height() / 2.0;
-    let (bg, stroke) = if *on {
-        (if resp.hovered() { p.accent_hover } else { p.accent }, Stroke::NONE)
+    if *on {
+        accent_fill(ui.painter(), rect, radius as u8, resp.hovered(), false);
     } else {
-        (p.card, Stroke::new(1.0, if resp.hovered() { p.text2 } else { p.text3 }))
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), bg);
-    if stroke != Stroke::NONE {
+        let stroke = Stroke::new(1.0, if resp.hovered() { p.text2 } else { p.text3 });
+        ui.painter().rect_filled(rect, CornerRadius::same(radius as u8), p.card);
         ui.painter().rect_stroke(rect, CornerRadius::same(radius as u8), stroke, StrokeKind::Inside);
     }
     let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), t);
@@ -589,7 +680,8 @@ pub fn paint_round_check(
     }
     if checked {
         painter.circle_filled(center, r, color);
-        painter.text(center, Align2::CENTER_CENTER, icons::CHECK, icon_font(r * 1.15), Color32::WHITE);
+        let ink = if color == pal().accent { pal().on_accent } else { Color32::WHITE };
+        painter.text(center, Align2::CENTER_CENTER, icons::CHECK, icon_font(r * 1.15), ink);
     } else {
         painter.circle_stroke(center, r, Stroke::new(1.5, if hovered { color } else { ring }));
         if hovered {
@@ -609,6 +701,12 @@ pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, subtitle: &str) {
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon, icon_font(40.0), p.accent_text);
         } else {
             ui.painter().circle_filled(rect.center(), 46.0, p.accent_soft);
+            if p.skin == theme::Skin::Cyberpunk {
+                // A colour-split glitch behind the icon.
+                for (dx, c) in [(-2.0, p.magenta), (2.0, p.cyan)] {
+                    ui.painter().text(rect.center() + vec2(dx, 0.0), Align2::CENTER_CENTER, icon, icon_fill_font(44.0), with_alpha(c, 140));
+                }
+            }
             ui.painter().text(
                 rect.center(),
                 Align2::CENTER_CENTER,
@@ -684,7 +782,7 @@ pub fn text_input_ex(ui: &mut Ui, text: &mut String, hint: &str, width: f32, pas
         ui.painter().hline(
             r.x_range().shrink(1.0),
             r.bottom() - 1.0,
-            Stroke::new(2.0, p.accent),
+            Stroke::new(2.0, if p.skin == theme::Skin::NeonSunset { p.cyan } else { p.accent }),
         );
     }
     resp

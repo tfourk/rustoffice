@@ -782,7 +782,13 @@ fn adapt(style: &RunStyle) -> (Color32, Color32) {
     let dark_bg = bg_kept.map(|b| luminance(b) < 0.5).unwrap_or(p.dark);
     let mut fg = match style.color {
         Some(c) => c,
-        None if link => p.accent_text,
+        None if link => {
+            if p.skin == crate::theme::Skin::NeonSunset {
+                p.cyan
+            } else {
+                p.accent_text
+            }
+        }
         None => {
             if bg_kept.is_some() && dark_bg && !p.dark {
                 Color32::WHITE

@@ -404,39 +404,99 @@ fn picked(skin: Skin, c: &[u32; 33], shadow: Color32) -> Palette {
 }
 
 impl Palette {
-    /// Neon Sunset: a synthwave dusk. PROVISIONAL colours.
+    /// Neon Sunset: a synthwave dusk. Calm indigo surfaces for reading,
+    /// hot pink fading into sunset orange on the marks that mean "act
+    /// here", teal for links and focus, a striped sun and a glowing
+    /// horizon in the title bar (see [`sunset`]). Every text colour meets
+    /// WCAG AA on the surfaces it is used on.
     pub fn neon_sunset() -> Self {
         picked(
             Skin::NeonSunset,
             &[
-                0x1A0F2E, 0x241640, 0x2B1A4A, 0x150B26, 0x2F1E52, 0x3A2563, 0x3D2A5E, 0x6A4A93, // bg … stroke_strong
-                0xFFF4EC, 0xE8D3E6, 0xB79CC7, 0x6E5A85, // text … disabled
-                0xFF4F9A, 0xFF6BAA, 0xE23D86, 0x1A0F2E, 0xFF8CC6, // accent … accent_text
-                0x4A2470, 0x57297F, 0x3A1D52, // selected, selected_hover, accent_soft
-                0xFF6B6B, 0x3D1626, 0xFFB86B, 0x3B2618, 0x3DDBB4, 0x11322E, // danger … success_soft
-                0xFF8A3D, 0x2A1838, 0x24183F, // flag, flagged_row, pinned_row
-                0x3FE0D0, 0xFF4F9A, 0xFFB347, 0x3D2A5E, // cyan, magenta, yellow, rule
+                0x130C23, 0x221939, 0x281E42, 0x1A1230, 0x2E2249, 0x3A2C57, 0x3C2E5E, 0x7360A2, // bg … stroke_strong
+                0xF6EAF3, 0xD6C7E3, 0xAFA0C8, 0x6E5E8A, // text … disabled
+                0xFF4F9E, 0xFF6DAF, 0xE83F8B, 0x1A0B2C, 0xFF94C8, // accent … accent_text
+                0x472049, 0x55244F, 0x381C44, // selected, selected_hover, accent_soft
+                0xFF6F69, 0x3D1832, 0xFFB84D, 0x38242E, 0x62E6A2, 0x163428, // danger … success_soft
+                0xFF9A4D, 0x37233A, 0x232845, // flag, flagged_row, pinned_row
+                0x52D9D1, 0xD77BFF, 0xFFCB6B, 0x33264F, // cyan, magenta, yellow, rule
             ],
-            Color32::from_black_alpha(120),
+            Color32::from_rgba_unmultiplied(0xF0, 0x48, 0x9E, 0x40),
         )
     }
 
-    /// Cyberpunk: near-black with acid yellow, cyan and magenta. PROVISIONAL colours.
+    /// Cyberpunk: near-black panels with cut corners, acid yellow for
+    /// controls, electric cyan for live text and edges, hot magenta for the
+    /// selection and the glow around dialogs (see [`cut_corners`] and
+    /// `cyber_visuals`). Every text colour meets WCAG AA on the surfaces it
+    /// is used on.
     pub fn cyberpunk() -> Self {
         picked(
             Skin::Cyberpunk,
             &[
-                0x0B0B10, 0x121219, 0x16161F, 0x08080C, 0x1C1C28, 0x262636, 0x2B2B3D, 0x00D8E8,
-                0xEAF6F8, 0xB9C7CC, 0x8A97A0, 0x4A4F5A,
-                0xF3E600, 0xFFF23D, 0xD4C800, 0x0B0B10, 0xF3E600,
-                0x2A1530, 0x34193C, 0x23220A,
-                0xFF3B5C, 0x2E0F17, 0xFFB000, 0x2B2208, 0x2BFF88, 0x0D2A1A,
-                0xFF2A6D, 0x1A1018, 0x10181C,
-                0x00E5FF, 0xFF2A6D, 0xF3E600, 0x23233A,
+                0x06070B, 0x0D0F16, 0x12151E, 0x08090E, 0x171B26, 0x1F2433, 0x26404B, 0x24818E, // bg … stroke_strong
+                0xDFE8EE, 0xB4C1CB, 0x919EAC, 0x5C6474, // text … disabled
+                0xE6F032, 0xF2F87A, 0xBAC41E, 0x06070B, 0x58E1EC, // accent … accent_text
+                0x34163B, 0x3E1C46, 0x0F2229, // selected, selected_hover, accent_soft
+                0xFF5A52, 0x2C1018, 0xFFB224, 0x2A1F08, 0x39F2A0, 0x0C2A1E, // danger … success_soft
+                0xFF3DA8, 0x1D0E15, 0x0F1A21, // flag, flagged_row, pinned_row
+                0x1FDDEB, 0xFF3DA8, 0xE6F032, 0x1E2A36, // cyan, magenta, yellow, rule
             ],
-            Color32::from_rgba_unmultiplied(0x00, 0xE5, 0xFF, 0x55),
+            Color32::from_rgba_unmultiplied(0xFF, 0x3D, 0xA8, 0x38),
         )
     }
+}
+
+/// Neon Sunset's sun and sky colours, used for its gradients.
+pub mod sunset {
+    use super::{hex, mix};
+    use egui::Color32;
+
+    pub const GOLD: Color32 = hex(0xFFC861);
+    pub const ORANGE: Color32 = hex(0xFF8A4C);
+    pub const PINK: Color32 = hex(0xFF4F9E);
+    pub const VIOLET: Color32 = hex(0x8E5CFF);
+    /// The sky at the bottom of the title bar: at its ends, and warmer in
+    /// the middle behind the search box.
+    pub const SKY_EDGE: Color32 = hex(0x1C1032);
+    pub const SKY_GLOW: Color32 = hex(0x2C1242);
+    /// Where the pink-to-orange accent gradient ends when hovered / pressed.
+    pub const HOVER_END: Color32 = hex(0xFF9C66);
+    pub const PRESSED_END: Color32 = hex(0xF07A3E);
+
+    /// The sun's colour `t` of the way down it: gold, orange, then pink.
+    pub fn sun_at(t: f32) -> Color32 {
+        let t = t.clamp(0.0, 1.0);
+        if t < 0.5 {
+            mix(GOLD, ORANGE, t * 2.0)
+        } else {
+            mix(ORANGE, PINK, t * 2.0 - 1.0)
+        }
+    }
+}
+
+/// Text colour for a label drawn on `fill`: white, or dark ink where white
+/// would be hard to read (light or bright fills).
+pub fn ink_on(fill: Color32) -> Color32 {
+    let ink = hex(0x14101C);
+    if contrast(Color32::WHITE, fill) >= contrast(ink, fill) {
+        Color32::WHITE
+    } else {
+        ink
+    }
+}
+
+/// WCAG 2 contrast ratio between two opaque colours.
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let ch = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * ch(c.r()) + 0.7152 * ch(c.g()) + 0.0722 * ch(c.b())
+    };
+    let (la, lb) = (lum(a), lum(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 static PALETTE: RwLock<Option<Palette>> = RwLock::new(None);
@@ -624,12 +684,47 @@ fn build_style(p: &Palette) -> Style {
     if p.term {
         terminal_visuals(&mut v, p);
     }
+    if p.skin == Skin::NeonSunset {
+        sunset_visuals(&mut v, p);
+    }
+    if p.skin == Skin::Cyberpunk {
+        cyber_visuals(&mut v, p);
+    }
 
     style.visuals = v;
     style.animation_time = 0.12;
     style.interaction.tooltip_delay = 0.45;
     style.url_in_tooltip = false;
     style
+}
+
+/// Neon Sunset: teal (the ocean) for links, the text cursor and focus, so
+/// they never look like the pink unread marks; a pink neon edge and glow
+/// on dialogs and menus.
+fn sunset_visuals(v: &mut Visuals, p: &Palette) {
+    v.hyperlink_color = p.cyan;
+    v.text_cursor.stroke = Stroke::new(2.0, p.cyan);
+    v.selection.stroke = Stroke::new(1.5, p.cyan);
+    v.window_stroke = window_stroke_for(p);
+    v.popup_shadow.color = Color32::from_rgba_unmultiplied(0xF0, 0x48, 0x9E, 0x28);
+}
+
+/// Cyberpunk: neon edges instead of drop shadows (a cyan rim with a
+/// magenta haze around dialogs, a cyan haze around menus), cyan text on a
+/// violet selection, a yellow caret and cyan hover rims. The corner radii
+/// stay, so [`cut_corners`] cuts them.
+fn cyber_visuals(v: &mut Visuals, p: &Palette) {
+    v.window_stroke = Stroke::new(1.0, p.stroke_strong);
+    v.window_shadow = Shadow { offset: [0, 0], blur: 24, spread: 0, color: p.shadow };
+    v.popup_shadow = Shadow { offset: [0, 0], blur: 12, spread: 0, color: with_alpha(p.cyan, 0x30) };
+    v.selection.bg_fill = p.selected;
+    v.selection.stroke = Stroke::new(1.0, p.accent_text);
+    v.text_cursor.stroke = Stroke::new(2.0, p.accent);
+    v.extreme_bg_color = p.sunken;
+    v.text_edit_bg_color = Some(p.sunken);
+    v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.5 };
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.cyan);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, p.accent);
 }
 
 /// Square corners, box lines and no shadows for the Terminal theme.
@@ -694,16 +789,49 @@ pub fn square_corners(ctx: &egui::Context) {
     });
 }
 
-/// Turns every rounded rectangle painted this frame into a panel with its
-/// top-left and bottom-right corners cut off, the Cyberpunk theme's shape.
-/// Square rectangles (backgrounds, lines, the Cyberpunk window frame),
-/// images, shadows and rotated rectangles stay as they are.
+/// The Cyberpunk theme's shapes, applied to everything painted this frame:
+/// - every rounded rectangle becomes a panel with its top-left and
+///   bottom-right corners cut off; large framed panels get an acid-yellow
+///   bracket lit along the cut top-left corner and a cyan tick on the other;
+/// - anything filled with the selection colour gets a magenta outline;
+/// - circles of radius 5 or more (avatars, round buttons) become cut tiles.
+///
+/// Square rectangles (backgrounds, lines), images, shadows and rotated
+/// rectangles stay as they are, and small dots stay round.
 pub fn cut_corners(ctx: &egui::Context) {
+    let p = pal();
+    let selection_line = Stroke::new(1.0, mix(p.selected, p.magenta, 0.6));
+    let is_selection = |c: Color32| c == p.selected || c == p.selected_hover;
     restyle_shapes(ctx, &|shape| {
+        if let egui::Shape::Circle(c) = shape {
+            if c.radius >= 5.0 {
+                // A tile 1.8 r wide, inside the circle's box.
+                let (h, k) = (c.radius * 0.9, c.radius * 0.45);
+                let o = c.center;
+                let stroke = if c.stroke.width == 0.0 && is_selection(c.fill) { selection_line } else { c.stroke };
+                let points = vec![
+                    o + egui::vec2(-h + k, -h),
+                    o + egui::vec2(h, -h),
+                    o + egui::vec2(h, h - k),
+                    o + egui::vec2(h - k, h),
+                    o + egui::vec2(-h, h),
+                    o + egui::vec2(-h, -h + k),
+                ];
+                *shape = egui::Shape::convex_polygon(points, c.fill, stroke);
+            }
+            return;
+        }
         let egui::Shape::Rect(r) = shape else { return };
         let radius = r.corner_radius.nw.max(r.corner_radius.se) as f32;
         if radius == 0.0 || r.blur_width > 0.0 || r.brush.is_some() || r.angle != 0.0 {
             return;
+        }
+        // Framed before the selection outline is added, so selected rows
+        // don't count as framed panels.
+        let framed = r.stroke.width >= 1.0;
+        if r.stroke.width == 0.0 && is_selection(r.fill) {
+            r.stroke = selection_line;
+            r.stroke_kind = egui::StrokeKind::Inside;
         }
         // Where the stroke sits, as egui would draw it.
         let rect = match r.stroke_kind {
@@ -724,18 +852,46 @@ pub fn cut_corners(ctx: &egui::Context) {
             egui::pos2(rect.left(), rect.bottom()),
             egui::pos2(rect.left(), rect.top() + cut),
         ];
-        *shape = egui::Shape::Path(egui::epaint::PathShape::convex_polygon(points, r.fill, r.stroke));
+        let panel = egui::Shape::Path(egui::epaint::PathShape::convex_polygon(points, r.fill, r.stroke));
+        if framed && rect.width() >= 120.0 && rect.height() >= 40.0 {
+            let t = rect.shrink(0.5);
+            let bracket = egui::Shape::line(
+                vec![
+                    egui::pos2(t.left(), t.top() + cut + 12.0),
+                    egui::pos2(t.left(), t.top() + cut),
+                    egui::pos2(t.left() + cut, t.top()),
+                    egui::pos2(t.left() + cut + 32.0, t.top()),
+                ],
+                Stroke::new(2.0, p.accent),
+            );
+            let tick = egui::Shape::line(
+                vec![
+                    egui::pos2(t.right(), t.bottom() - cut - 8.0),
+                    egui::pos2(t.right(), t.bottom() - cut),
+                    egui::pos2(t.right() - cut, t.bottom()),
+                    egui::pos2(t.right() - cut - 8.0, t.bottom()),
+                ],
+                Stroke::new(1.0, p.cyan),
+            );
+            *shape = egui::Shape::Vec(vec![panel, bracket, tick]);
+        } else {
+            *shape = panel;
+        }
     });
 }
 
 /// Border of dialogs: none, or a box line in the Terminal theme, where
 /// dialogs have no shadow to set them apart.
 pub fn window_stroke() -> Stroke {
-    let p = pal();
-    if p.term {
-        Stroke::new(1.0, p.stroke_strong)
-    } else {
-        Stroke::NONE
+    window_stroke_for(&pal())
+}
+
+fn window_stroke_for(p: &Palette) -> Stroke {
+    match p.skin {
+        Skin::Terminal | Skin::Cyberpunk => Stroke::new(1.0, p.stroke_strong),
+        // A soft pink neon edge.
+        Skin::NeonSunset => Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xFF, 0x4F, 0x9E, 90)),
+        _ => Stroke::NONE,
     }
 }
 
@@ -743,6 +899,10 @@ pub fn window_shadow() -> Shadow {
     let p = pal();
     if p.term {
         return Shadow::NONE;
+    }
+    if p.skin == Skin::Cyberpunk {
+        // A magenta haze all round instead of a drop shadow.
+        return Shadow { offset: [0, 0], blur: 24, spread: 0, color: p.shadow };
     }
     Shadow {
         offset: [0, 8],

@@ -156,6 +156,20 @@ impl Default for CalState {
     }
 }
 
+/// Fill and text colour of an all-day event chip in the event's colour,
+/// dimmed toward the card by `dim` unless hovered. Themes with their own
+/// colours dim the hovered chip a little too and pick the text colour that
+/// reads best on it, since their accent (the colour of events without a
+/// category) can be too bright for white text.
+fn chip_colors(color: Color32, hovered: bool, dim: f32) -> (Color32, Color32) {
+    let p = pal();
+    if p.skin == theme::Skin::Standard {
+        return (if hovered { color } else { mix(color, p.card, dim) }, Color32::WHITE);
+    }
+    let fill = mix(color, p.card, if hovered { 0.3 } else { dim });
+    (fill, theme::ink_on(fill))
+}
+
 fn event_color(app: &App, e: &CalEvent) -> Color32 {
     if e.id < 0 {
         return theme::hex(0xC239B3);
@@ -211,7 +225,7 @@ pub fn mini_month(ui: &mut Ui, month: &mut NaiveDate, selected: NaiveDate, marks
                 ui.painter().circle_filled(c, 12.0, p.hover);
             }
             let color = if date == today {
-                Color32::WHITE
+                p.on_accent
             } else if in_month {
                 p.text
             } else {
@@ -557,7 +571,7 @@ impl App {
                 if d.day() == 1 && *d != today { Align2::LEFT_CENTER } else { Align2::CENTER_CENTER },
                 label,
                 font_semibold(12.5),
-                if *d == today { Color32::WHITE } else if d.month() == month { p.text } else { p.text3 },
+                if *d == today { p.on_accent } else if d.month() == month { p.text } else { p.text3 },
             );
             if *d == self.cal.date && *d != today {
                 ui.painter().rect_stroke(cell.shrink(1.0), 2.0, Stroke::new(1.5, p.accent), egui::StrokeKind::Inside);
@@ -581,10 +595,11 @@ impl App {
                 let color = event_color(self, &o.event);
                 let r = ui.interact(chip, Id::new(("mchip", o.event.id, o.start, *d)), Sense::click());
                 if o.event.all_day || o.end - o.start >= 86400 {
-                    ui.painter().rect_filled(chip, CornerRadius::same(4), if r.hovered() { color } else { mix(color, p.card, if p.dark { 0.45 } else { 0.25 }) });
-                    let g = egui::text::LayoutJob::simple_singleline(o.event.title.clone(), font_semibold(12.0), Color32::WHITE);
+                    let (fill, ink) = chip_colors(color, r.hovered(), if p.dark { 0.45 } else { 0.25 });
+                    ui.painter().rect_filled(chip, CornerRadius::same(4), fill);
+                    let g = egui::text::LayoutJob::simple_singleline(o.event.title.clone(), font_semibold(12.0), ink);
                     let g = ui.painter().layout_job(egui::text::LayoutJob { wrap: egui::text::TextWrapping::truncate_at_width(chip.width() - 10.0), ..g });
-                    ui.painter().galley(chip.left_center() + vec2(6.0, -g.size().y / 2.0), g, Color32::WHITE);
+                    ui.painter().galley(chip.left_center() + vec2(6.0, -g.size().y / 2.0), g, ink);
                 } else {
                     if r.hovered() {
                         ui.painter().rect_filled(chip, CornerRadius::same(4), p.hover);
@@ -642,7 +657,7 @@ impl App {
             if is_today {
                 ui.painter().circle_filled(num_pos, 13.0, p.accent);
             }
-            ui.painter().text(num_pos, Align2::CENTER_CENTER, d.day().to_string(), font_semibold(17.0), if is_today { Color32::WHITE } else { p.text });
+            ui.painter().text(num_pos, Align2::CENTER_CENTER, d.day().to_string(), font_semibold(17.0), if is_today { p.on_accent } else { p.text });
         }
         // All-day row.
         let all_day: Vec<&Occurrence> = occ.iter().filter(|o| o.event.all_day || o.end - o.start >= 86400).collect();
@@ -684,12 +699,13 @@ impl App {
             );
             let color = event_color(self, &o.event);
             let resp = ui.interact(r, Id::new(("allday", o.event.id, o.start)), Sense::click());
-            ui.painter().rect_filled(r, CornerRadius::same(4), if resp.hovered() { color } else { mix(color, p.card, if p.dark { 0.4 } else { 0.2 }) });
+            let (fill, ink) = chip_colors(color, resp.hovered(), if p.dark { 0.4 } else { 0.2 });
+            ui.painter().rect_filled(r, CornerRadius::same(4), fill);
             let g = ui.painter().layout_job(egui::text::LayoutJob {
                 wrap: egui::text::TextWrapping::truncate_at_width(r.width() - 10.0),
-                ..egui::text::LayoutJob::simple_singleline(o.event.title.clone(), font_semibold(12.0), Color32::WHITE)
+                ..egui::text::LayoutJob::simple_singleline(o.event.title.clone(), font_semibold(12.0), ink)
             });
-            ui.painter().galley(r.left_center() + vec2(6.0, -g.size().y / 2.0), g, Color32::WHITE);
+            ui.painter().galley(r.left_center() + vec2(6.0, -g.size().y / 2.0), g, ink);
             if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 open = Some(((*o).clone(), r.right_bottom()));
             }
@@ -1253,7 +1269,8 @@ fn calendar_toggle(ui: &mut Ui, on: &mut bool, label: &str, color: Color32) {
     let b = Rect::from_center_size(Pos2::new(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
     if *on {
         ui.painter().rect_filled(b, CornerRadius::same(3), color);
-        ui.painter().text(b.center(), Align2::CENTER_CENTER, icons::CHECK, icon_fill_font(12.0), Color32::WHITE);
+        let ink = if color == p.accent { p.on_accent } else { Color32::WHITE };
+        ui.painter().text(b.center(), Align2::CENTER_CENTER, icons::CHECK, icon_fill_font(12.0), ink);
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.5, color), egui::StrokeKind::Inside);
     }
