@@ -155,7 +155,6 @@ pub struct MessageSummary {
     pub cc: String,
     pub date: i64,
     pub preview: String,
-    #[allow(dead_code)] // used for sorting in SQL
     pub size: i64,
     pub seen: bool,
     pub flagged: bool,

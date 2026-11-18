@@ -179,6 +179,7 @@ impl App {
                 .fill(p.card)
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(Margin::same(32))
+                .stroke(crate::theme::window_stroke())
                 .shadow(crate::theme::window_shadow()),
         );
         // Kick off the connection test after OAuth sign-in succeeded.

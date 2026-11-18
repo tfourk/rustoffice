@@ -19,6 +19,7 @@ use crate::model::*;
 use crate::store::{ListQuery, SortField, Store};
 use crate::theme::{self, density, font, font_bold, font_semibold, icon_fill_font, icon_font, pal};
 use crate::ui::html::{self, HtmlAction, HtmlDoc};
+use crate::ui::terminal::term_heading;
 use crate::ui::widgets;
 use crate::util;
 
@@ -446,7 +447,17 @@ impl App {
                     top: 0,
                     bottom: 8,
                 }))
-                .show(ui, |ui| self.folder_pane(ui));
+                .show(ui, |ui| {
+                    if pal().term {
+                        // A box like the other panes.
+                        widgets::card().inner_margin(Margin::symmetric(6, 2)).show(ui, |ui| {
+                            ui.set_min_size(ui.available_size());
+                            self.folder_pane(ui);
+                        });
+                    } else {
+                        self.folder_pane(ui);
+                    }
+                });
             let w = r.response.rect.width();
             if (w - self.cfg.window.folder_width).abs() > 1.0 {
                 self.cfg.window.folder_width = w;
@@ -456,12 +467,14 @@ impl App {
         let pos = self.cfg.mail.reading_pane;
         match pos {
             ReadingPanePos::Right | ReadingPanePos::Bottom => {
+                // Separate ids, so switching layouts doesn't carry the
+                // list's width over as its height or the other way round.
                 let panel = if pos == ReadingPanePos::Right {
                     egui::Panel::left("list_pane")
                         .default_size(self.cfg.window.list_width)
                         .size_range(300.0..=760.0)
                 } else {
-                    egui::Panel::top("list_pane")
+                    egui::Panel::top("list_pane_bottom")
                         .default_size(self.cfg.window.list_height)
                         .size_range(160.0..=900.0)
                 };
@@ -536,18 +549,33 @@ impl App {
 
     fn folder_pane(&mut self, ui: &mut Ui) {
         let p = pal();
+        if p.term {
+            egui::Panel::bottom("folder-status")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::NONE)
+                .show(ui, |ui| self.term_status_box(ui));
+        }
         ScrollArea::vertical()
             .id_salt("folders")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 // Collapse toggle row.
-                ui.horizontal(|ui| {
-                    if widgets::icon_button(ui, icons::LIST, "Hide folder pane").clicked() {
-                        self.cfg.window.folder_pane_open = false;
-                        self.mark_config_dirty();
-                    }
-                });
+                let mut hide = false;
+                if p.term {
+                    term_heading(ui, icons::FOLDER_SIMPLE, "Folders", |ui| {
+                        hide = widgets::icon_button(ui, icons::LIST, "Hide folder pane").clicked();
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        hide = widgets::icon_button(ui, icons::LIST, "Hide folder pane").clicked();
+                    });
+                }
+                if hide {
+                    self.cfg.window.folder_pane_open = false;
+                    self.mark_config_dirty();
+                }
                 ui.add_space(4.0);
 
                 // Favorites
@@ -715,7 +743,7 @@ impl App {
             Align2::LEFT_CENTER,
             title,
             font_semibold(14.0),
-            p.text,
+            if p.term { p.accent_text } else { p.text },
         );
         resp.clicked()
     }
@@ -733,8 +761,9 @@ impl App {
             icon_font(12.0),
             p.text2,
         );
-        let g = elided(ui, name, font_semibold(14.0), p.text, rect.width() - 60.0);
-        ui.painter().galley(Pos2::new(rect.left() + 28.0, rect.center().y - g.size().y / 2.0), g, p.text);
+        let color = if p.term { p.accent_text } else { p.text };
+        let g = elided(ui, name, font_semibold(14.0), color, rect.width() - 60.0);
+        ui.painter().galley(Pos2::new(rect.left() + 28.0, rect.center().y - g.size().y / 2.0), g, color);
         let icon = match status {
             Some(SyncStatus::Error(_)) => Some((icons::WARNING, p.danger)),
             Some(SyncStatus::Syncing(_)) | Some(SyncStatus::Connecting) => Some((icons::ARROWS_CLOCKWISE, p.accent_text)),
@@ -769,13 +798,15 @@ impl App {
             theme::Density::Compact => 28.0,
             theme::Density::Cozy => 32.0,
             theme::Density::Roomy => 36.0,
-        };
+        } - if p.term { 4.0 } else { 0.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
         let drop_hover = folder.is_some() && resp.dnd_hover_payload::<DragMsgs>().is_some();
+        // The Terminal theme marks the open folder with a green block.
+        let (sel_bg, sel_hover) = if p.term { (p.accent, p.accent_hover) } else { (p.selected, p.selected_hover) };
         let bg = if drop_hover {
             p.selected_hover
         } else if selected {
-            if resp.hovered() { p.selected_hover } else { p.selected }
+            if resp.hovered() { sel_hover } else { sel_bg }
         } else if resp.hovered() {
             p.hover
         } else {
@@ -801,6 +832,25 @@ impl App {
             }
         }
         let icon_x = x + 22.0;
+        if p.term {
+            // Folder name and an [n] count, like a terminal mail reader.
+            let fg = if selected { p.on_accent } else { p.text };
+            ui.painter().text(Pos2::new(icon_x, rect.center().y), Align2::CENTER_CENTER, icon, icon_font(15.0), if selected { p.on_accent } else { p.text2 });
+            let count_text = format!("[{count}]");
+            let count_color = if selected {
+                p.on_accent
+            } else if count > 0 && count_strong {
+                p.yellow
+            } else {
+                p.text3
+            };
+            let cg = ui.painter().layout_no_wrap(count_text, font_semibold(13.5), count_color);
+            let strong = selected || (count > 0 && count_strong);
+            let g = elided(ui, label, if strong { font_semibold(14.0) } else { font(14.0) }, fg, rect.right() - 16.0 - cg.size().x - (icon_x + 16.0));
+            ui.painter().galley(Pos2::new(icon_x + 16.0, rect.center().y - g.size().y / 2.0), g, fg);
+            ui.painter().galley(Pos2::new(rect.right() - 6.0 - cg.size().x, rect.center().y - cg.size().y / 2.0), cg, count_color);
+            return resp.on_hover_cursor(CursorIcon::PointingHand);
+        }
         ui.painter().text(
             Pos2::new(icon_x, rect.center().y),
             Align2::CENTER_CENTER,
@@ -898,7 +948,11 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            ui.label(RichText::new(&title).font(font_semibold(18.0)).color(p.text));
+            if p.term {
+                self.term_list_title(ui, &title);
+            } else {
+                ui.label(RichText::new(&title).font(font_semibold(18.0)).color(p.text));
+            }
             if let (false, MailView::Folder(id)) = (searching, self.mail.view) {
                 if let Some(f) = self.mail.find_folder(id).cloned() {
                     let fav = self.cfg.is_favorite(&f.account_id, &f.path);
@@ -977,6 +1031,14 @@ impl App {
                     let label = if t == 0 { "Other" } else { "Focused" };
                     ui.label(RichText::new(format!("{} new in {label}", self.mail.other_unread)).font(font(12.0)).color(p.text3));
                 }
+                if p.term {
+                    term_list_hints(ui);
+                }
+            });
+        } else if p.term {
+            ui.horizontal(|ui| {
+                ui.set_min_height(26.0);
+                term_list_hints(ui);
             });
         } else {
             ui.add_space(6.0);
@@ -984,6 +1046,12 @@ impl App {
         let (sep, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
         ui.painter().hline(sep.x_range(), sep.center().y, Stroke::new(1.0, p.stroke));
         self.outbox_banners(ui);
+        let term_cols = p.term.then(|| TermCols::new(ui, ui.available_rect_before_wrap().x_range()));
+        if let Some(cols) = &term_cols {
+            if !self.mail.rows.is_empty() {
+                cols.header(ui);
+            }
+        }
 
         if self.mail.rows.is_empty() {
             let (icon, t, s) = if searching {
@@ -1008,11 +1076,25 @@ impl App {
         let heights: Vec<f32> = rows
             .iter()
             .map(|r| match r {
+                // The Terminal theme lists one message per line.
+                Row::Header(_) if term_cols.is_some() => 26.0,
+                Row::Msg { .. } if term_cols.as_ref().is_some_and(|c| c.narrow) => 34.0 + pad,
+                Row::Msg { .. } if term_cols.is_some() => 16.0 + pad,
                 Row::Header(_) => 30.0,
                 Row::Msg { child, .. } => {
                     let lines = if show_preview && !child { 3.0 } else { 2.0 };
                     lines * 19.0 + 2.0 * pad + 6.0
                 }
+            })
+            .collect();
+        // Line numbers for the Terminal theme's first column.
+        let numbers: Vec<usize> = rows
+            .iter()
+            .scan(0, |n, r| {
+                if matches!(r, Row::Msg { .. }) {
+                    *n += 1;
+                }
+                Some(*n)
             })
             .collect();
         let has_more = messages.len() >= self.mail.limit;
@@ -1053,6 +1135,30 @@ impl App {
                     }
                     if y + h >= viewport.min.y && y <= viewport.max.y {
                         match row {
+                            Row::Header(text) if term_cols.is_some() => {
+                                let g = ui.painter().layout_no_wrap(text.clone(), font_semibold(13.0), p.text3);
+                                let y = rect.center().y + 2.0;
+                                ui.painter().hline((rect.left() + 8.0)..=(rect.left() + 20.0), y, Stroke::new(1.0, p.rule));
+                                let w = g.size().x;
+                                ui.painter().galley(Pos2::new(rect.left() + 26.0, y - g.size().y / 2.0), g, p.text3);
+                                ui.painter().hline((rect.left() + 32.0 + w)..=(rect.right() - 8.0), y, Stroke::new(1.0, p.rule));
+                            }
+                            Row::Msg { idx, count, child, expanded, unread_any } if term_cols.is_some() => {
+                                let m = &messages[*idx];
+                                let row = TermRow {
+                                    number: numbers[ri],
+                                    count: *count,
+                                    child: *child,
+                                    expanded: *expanded,
+                                    unread_any: *unread_any,
+                                    selected: selection.contains(&m.id),
+                                    show_preview,
+                                    select_mode,
+                                };
+                                if let Some(cols) = &term_cols {
+                                    self.draw_term_row(ui, rect, m, &row, cols, &selection, &mut actions);
+                                }
+                            }
                             Row::Header(text) => {
                                 ui.painter().text(
                                     Pos2::new(rect.left() + 16.0, rect.center().y + 3.0),
@@ -1343,7 +1449,11 @@ impl App {
             ui.painter().galley(Pos2::new(x, line3_y - g.size().y / 2.0), g, p.text3);
         }
 
-        // Interactions.
+        self.message_row_interactions(ui, &resp, m, selection, actions);
+    }
+
+    /// Dragging, clicking and the context menu of a message list row.
+    fn message_row_interactions(&self, ui: &Ui, resp: &egui::Response, m: &MessageSummary, selection: &HashSet<MsgId>, actions: &mut Vec<ListAction>) {
         if resp.drag_started() {
             let ids = if selection.contains(&m.id) { selection.iter().copied().collect() } else { vec![m.id] };
             resp.dnd_set_drag_payload(DragMsgs(ids));
@@ -2192,13 +2302,25 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let selected = reading.items.iter().find(|i| i.summary.id == reading.msg_id).map(|i| i.summary.clone());
-                        ui.add(egui::Label::new(RichText::new(&reading.subject).font(font_semibold(21.0)).color(p.text)).wrap());
+                        if p.term {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(icons::ENVELOPE_SIMPLE).font(icon_font(16.0)).color(p.success));
+                                ui.add_space(4.0);
+                                ui.add(egui::Label::new(RichText::new(&reading.subject).font(font_semibold(17.0)).color(p.accent_text)).wrap());
+                            });
+                        } else {
+                            ui.add(egui::Label::new(RichText::new(&reading.subject).font(font_semibold(21.0)).color(p.text)).wrap());
+                        }
                         if let Some(s) = &selected {
-                            if !s.categories.is_empty() || s.importance == Importance::High || reading.items.len() > 1 {
+                            // The Terminal theme lists categories as Tags in the header.
+                            let chips = !s.categories.is_empty() && !p.term;
+                            if chips || (s.importance == Importance::High && !p.term) || reading.items.len() > 1 {
                                 ui.add_space(4.0);
                                 ui.horizontal_wrapped(|ui| {
-                                    for c in &s.categories {
-                                        widgets::chip(ui, c, self.cfg.category_color(c));
+                                    if chips {
+                                        for c in &s.categories {
+                                            widgets::chip(ui, c, self.cfg.category_color(c));
+                                        }
                                     }
                                     if reading.items.len() > 1 {
                                         ui.label(RichText::new(format!("{}  {} messages", icons::CHAT_CIRCLE, reading.items.len())).font(icon_font(12.5)).color(p.text3));
@@ -2272,63 +2394,50 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // Header
-                ui.horizontal(|ui| {
-                    let outgoing = s.folder_is_outgoing();
-                    widgets::avatar(ui, 40.0, &s.from_name, &s.from_addr);
-                    ui.add_space(4.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(s.sender()).font(font_semibold(15.0)).color(p.text));
-                            if !s.from_addr.is_empty() && s.from_addr != s.sender() {
-                                let r = ui.add(egui::Label::new(RichText::new(format!("<{}>", s.from_addr)).font(font(13.0)).color(p.text3)).sense(Sense::click()));
-                                if r.on_hover_text("Click to copy").clicked() {
-                                    ui.ctx().copy_text(s.from_addr.clone());
+                if p.term {
+                    self.term_message_header(ui, item, &s, &ids, acts);
+                } else {
+                    ui.horizontal(|ui| {
+                        let outgoing = s.folder_is_outgoing();
+                        widgets::avatar(ui, 40.0, &s.from_name, &s.from_addr);
+                        ui.add_space(4.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(s.sender()).font(font_semibold(15.0)).color(p.text));
+                                if !s.from_addr.is_empty() && s.from_addr != s.sender() {
+                                    let r = ui.add(egui::Label::new(RichText::new(format!("<{}>", s.from_addr)).font(font(13.0)).color(p.text3)).sense(Sense::click()));
+                                    if r.on_hover_text("Click to copy").clicked() {
+                                        ui.ctx().copy_text(s.from_addr.clone());
+                                    }
+                                }
+                            });
+                            let to = item.parsed.as_ref().map(|pm| Addr::list_to_string(&pm.to)).unwrap_or_else(|| s.to.clone());
+                            let to_short = summarize_recipients(&to);
+                            ui.label(RichText::new(format!("To: {to_short}")).font(font(12.5)).color(p.text2)).on_hover_text(&to);
+                            if let Some(pm) = &item.parsed {
+                                if !pm.cc.is_empty() {
+                                    let cc = Addr::list_to_string(&pm.cc);
+                                    ui.label(RichText::new(format!("Cc: {}", summarize_recipients(&cc))).font(font(12.5)).color(p.text2)).on_hover_text(&cc);
                                 }
                             }
+                            let _ = outgoing;
                         });
-                        let to = item.parsed.as_ref().map(|pm| Addr::list_to_string(&pm.to)).unwrap_or_else(|| s.to.clone());
-                        let to_short = summarize_recipients(&to);
-                        ui.label(RichText::new(format!("To: {to_short}")).font(font(12.5)).color(p.text2)).on_hover_text(&to);
-                        if let Some(pm) = &item.parsed {
-                            if !pm.cc.is_empty() {
-                                let cc = Addr::list_to_string(&pm.cc);
-                                ui.label(RichText::new(format!("Cc: {}", summarize_recipients(&cc))).font(font(12.5)).color(p.text2)).on_hover_text(&cc);
-                            }
-                        }
-                        let _ = outgoing;
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        ui.vertical(|ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                let more = widgets::icon_button(ui, icons::DOTS_THREE, "More actions");
-                                egui::Popup::menu(&more).width(240.0).show(|ui| {
-                                    let mut out = Vec::new();
-                                    self.message_menu_items(ui, &s, &mut out);
-                                    for c in out {
-                                        acts.push(ReadAction::Cmd(c, ids.clone()));
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            ui.vertical(|ui| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    self.message_buttons(ui, &s, &ids, acts);
+                                });
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(RichText::new(util::fmt_full_date(s.date)).font(font(12.0)).color(p.text3));
+                                    if s.flagged {
+                                        ui.label(RichText::new(icons::FLAG).font(icon_fill_font(13.0)).color(p.flag));
                                     }
                                 });
-                                if widgets::icon_button(ui, icons::ARROW_BEND_UP_RIGHT, "Forward").clicked() {
-                                    acts.push(ReadAction::Cmd(MenuCmd::Forward, ids.clone()));
-                                }
-                                if widgets::icon_button(ui, icons::ARROW_BEND_DOUBLE_UP_LEFT, "Reply all").clicked() {
-                                    acts.push(ReadAction::Cmd(MenuCmd::ReplyAll, ids.clone()));
-                                }
-                                if widgets::icon_button(ui, icons::ARROW_BEND_UP_LEFT, "Reply").clicked() {
-                                    acts.push(ReadAction::Cmd(MenuCmd::Reply, ids.clone()));
-                                }
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(RichText::new(util::fmt_full_date(s.date)).font(font(12.0)).color(p.text3));
-                                if s.flagged {
-                                    ui.label(RichText::new(icons::FLAG).font(icon_fill_font(13.0)).color(p.flag));
-                                }
                             });
                         });
                     });
-                });
+                }
                 ui.add_space(10.0);
 
                 // Banners
@@ -3056,3 +3165,425 @@ pub fn update_outgoing_folders(state: &MailState) {
     OUTGOING_FOLDERS.with(|s| *s.borrow_mut() = ids);
 }
 
+
+// ======================================================= terminal theme
+
+/// Column positions of the Terminal theme's message list: a line number,
+/// three one-character marks (new, flag, attachment), From, Subject, Date
+/// and Size.
+struct TermCols {
+    /// Too narrow for one line per message: From and Date go on the first
+    /// line, the subject on the second.
+    narrow: bool,
+    /// Width of one character.
+    cw: f32,
+    num: f32,
+    new: f32,
+    flag: f32,
+    clip: f32,
+    from: f32,
+    subject: f32,
+    date: f32,
+    size: f32,
+    right: f32,
+}
+
+impl TermCols {
+    fn new(ui: &Ui, x: egui::Rangef) -> Self {
+        let cw = ui.painter().layout_no_wrap("0".into(), font(13.5), Color32::WHITE).size().x;
+        let num = x.min + 8.0;
+        let new = num + 5.0 * cw;
+        let flag = new + 2.0 * cw;
+        let clip = flag + 2.0 * cw;
+        let from = clip + 2.5 * cw;
+        let right = x.max - 10.0;
+        let size = right - 5.0 * cw;
+        let date = size - 14.0 * cw;
+        let from_w = ((date - from) * 0.34).clamp(12.0 * cw, 30.0 * cw);
+        let narrow = right - from < 64.0 * cw;
+        TermCols {
+            narrow,
+            cw,
+            num,
+            new,
+            flag,
+            clip,
+            from,
+            subject: from + from_w + cw,
+            date,
+            size,
+            right,
+        }
+    }
+
+    /// The column titles, divided by box lines.
+    fn header(&self, ui: &mut Ui) {
+        let p = pal();
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+        let y = rect.center().y;
+        let f = font_semibold(13.0);
+        let painter = ui.painter();
+        let cw = self.cw;
+        painter.text(Pos2::new(self.new - cw, y), Align2::RIGHT_CENTER, "#", f.clone(), p.text);
+        let cells = [
+            (self.new, "N", "New, replied or forwarded"),
+            (self.flag, "F", "Flagged or pinned"),
+            (self.clip, "A", "Has attachments"),
+        ];
+        for (x, label, tip) in cells {
+            let cell = Rect::from_center_size(Pos2::new(x + cw * 0.5, y), vec2(cw * 1.8, rect.height()));
+            painter.text(cell.center(), Align2::CENTER_CENTER, label, f.clone(), p.text);
+            ui.interact(cell, Id::new(("term-col", label)), Sense::hover()).on_hover_text(tip);
+        }
+        let rule = Stroke::new(1.0, p.rule);
+        if self.narrow {
+            painter.text(Pos2::new(self.from, y), Align2::LEFT_CENTER, "From / Subject", f.clone(), p.text);
+            painter.text(Pos2::new(self.right, y), Align2::RIGHT_CENTER, "Date / Size", f, p.text);
+            painter.vline((self.from - cw * 0.7).round() + 0.5, rect.y_range().shrink(3.0), rule);
+        } else {
+            painter.text(Pos2::new(self.from, y), Align2::LEFT_CENTER, "From", f.clone(), p.text);
+            painter.text(Pos2::new(self.subject, y), Align2::LEFT_CENTER, "Subject", f.clone(), p.text);
+            painter.text(Pos2::new(self.date, y), Align2::LEFT_CENTER, "Date", f.clone(), p.text);
+            painter.text(Pos2::new(self.right, y), Align2::RIGHT_CENTER, "Size", f, p.text);
+            for x in [self.from - cw * 0.7, self.subject - cw * 0.6, self.date - cw * 0.7, self.size - cw * 0.3] {
+                painter.vline(x.round() + 0.5, rect.y_range().shrink(3.0), rule);
+            }
+        }
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, rule);
+    }
+}
+
+/// What the Terminal theme's message list needs to know about a row.
+struct TermRow {
+    number: usize,
+    count: usize,
+    child: bool,
+    expanded: bool,
+    unread_any: bool,
+    selected: bool,
+    show_preview: bool,
+    select_mode: bool,
+}
+
+/// Message size the way terminal mail readers show it: 812B, 37K, 2.3M.
+fn term_size(bytes: i64) -> String {
+    let b = bytes.max(0) as f64;
+    if b < 1024.0 {
+        format!("{bytes}B")
+    } else if b < 1024.0 * 1024.0 {
+        format!("{:.0}K", b / 1024.0)
+    } else if b < 1024.0 * 1024.0 * 1024.0 {
+        format!("{:.1}M", b / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", b / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// The list's keyboard hints, right-aligned on the current row, if there
+/// is room for them.
+fn term_list_hints(ui: &mut Ui) {
+    let p = pal();
+    let need = ui.painter().layout_no_wrap("Del Delete   Enter Open   ↑↓ Navigate".into(), font(13.0), p.text).size().x + 30.0;
+    if ui.available_width() < need {
+        return;
+    }
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(10.0);
+        for (i, (key, label)) in [("Del", "Delete"), ("Enter", "Open"), ("↑↓", "Navigate")].into_iter().enumerate() {
+            if i > 0 {
+                ui.add_space(18.0);
+            }
+            ui.label(RichText::new(label).font(font(13.0)).color(p.text2));
+            ui.add_space(7.0);
+            let r = ui.label(RichText::new(key).font(font_semibold(13.0)).color(p.cyan));
+            ui.painter().hline(r.rect.x_range(), r.rect.bottom() - 1.0, Stroke::new(1.0, p.cyan));
+        }
+    });
+}
+
+impl App {
+    /// "✉ Messages ─ Inbox (6 unread)" over the Terminal theme's list.
+    fn term_list_title(&self, ui: &mut Ui, title: &str) {
+        let p = pal();
+        let (_, unread, _) = self.term_mailbox();
+        let roomy = ui.available_width() > 520.0;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.label(RichText::new(icons::ENVELOPE_SIMPLE).font(icon_font(15.0)).color(p.success));
+            ui.add_space(10.0);
+            if roomy {
+                ui.label(RichText::new("Messages").font(font_semibold(15.0)).color(p.cyan));
+                ui.label(RichText::new(" ─ ").font(font(15.0)).color(p.text3));
+            }
+            ui.label(RichText::new(title).font(font_semibold(15.0)).color(p.accent_text));
+            if self.mail.searching {
+                let n = self.mail.messages.len();
+                ui.label(RichText::new(format!(" ({n} found)")).font(font(15.0)).color(p.text2));
+            } else if unread > 0 && matches!(self.mail.view, MailView::Folder(_) | MailView::AllInboxes) {
+                ui.label(RichText::new(" (").font(font(15.0)).color(p.text2));
+                ui.label(RichText::new(format!("{unread} unread")).font(font_semibold(15.0)).color(p.yellow));
+                ui.label(RichText::new(")").font(font(15.0)).color(p.text2));
+            }
+            ui.add_space(6.0);
+        });
+    }
+
+    /// One message on one line, in the Terminal theme's columns.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_term_row(
+        &self,
+        ui: &mut Ui,
+        rect: Rect,
+        m: &MessageSummary,
+        row: &TermRow,
+        cols: &TermCols,
+        selection: &HashSet<MsgId>,
+        actions: &mut Vec<ListAction>,
+    ) {
+        let p = pal();
+        let id = Id::new(("msgrow", m.id));
+        let resp = ui.interact(rect, id, Sense::click_and_drag());
+        let hovered = resp.hovered() || resp.context_menu_opened();
+        let unread = !m.seen || (row.count > 1 && row.unread_any && !row.expanded);
+        let bg = if row.selected {
+            if hovered { p.selected_hover } else { p.selected }
+        } else if hovered {
+            p.hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        let painter = ui.painter().clone();
+        painter.rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::ZERO, bg);
+        let cw = cols.cw;
+        // One line, or two when the list is narrow (subject below).
+        let (y, y2) = if cols.narrow {
+            (rect.center().y - 8.5, rect.center().y + 8.5)
+        } else {
+            (rect.center().y, rect.center().y)
+        };
+        let strong = unread || row.selected;
+        let main = if strong { p.text } else { p.text2 };
+        let dim = if row.selected { p.text2 } else { p.text3 };
+        let text_font = if strong { font_semibold(13.5) } else { font(13.5) };
+
+        // Line number, or a check box while selecting.
+        if row.select_mode {
+            let mark = if row.selected { "[x]" } else { "[ ]" };
+            painter.text(Pos2::new(cols.new - cw, y), Align2::RIGHT_CENTER, mark, font(13.5), if row.selected { p.text } else { p.text3 });
+            let cell = Rect::from_min_max(Pos2::new(cols.num, rect.top()), Pos2::new(cols.new - cw * 0.5, rect.bottom()));
+            if ui.interact(cell, id.with("check"), Sense::click()).clicked() {
+                actions.push(ListAction::ToggleCheck(m.id));
+            }
+        } else {
+            painter.text(Pos2::new(cols.new - cw, y), Align2::RIGHT_CENTER, row.number.to_string(), font(13.5), dim);
+        }
+        let mark_at = |x: f32| Pos2::new(x + cw * 0.5, y);
+        let new_mark = if unread {
+            Some(("●", p.success))
+        } else if m.draft {
+            Some((icons::PENCIL_SIMPLE, p.danger))
+        } else if m.answered {
+            Some(("↩", dim))
+        } else if m.forwarded {
+            Some(("↪", dim))
+        } else {
+            None
+        };
+        if let Some((s, c)) = new_mark {
+            painter.text(mark_at(cols.new), Align2::CENTER_CENTER, s, font(13.5), c);
+        }
+        if m.flagged {
+            painter.text(mark_at(cols.flag), Align2::CENTER_CENTER, icons::FLAG, icon_fill_font(13.0), p.flag);
+        } else if m.pinned {
+            painter.text(mark_at(cols.flag), Align2::CENTER_CENTER, icons::PUSH_PIN, icon_fill_font(13.0), p.cyan);
+        }
+        if m.has_attachments {
+            painter.text(mark_at(cols.clip), Align2::CENTER_CENTER, icons::PAPERCLIP, icon_font(13.5), main);
+        }
+
+        // From, with the thread toggle; replies in an open thread hang off it.
+        let mut x = cols.from;
+        if row.child {
+            painter.text(Pos2::new(x + cw * 0.5, y), Align2::LEFT_CENTER, "└", font(13.5), dim);
+            x += 2.5 * cw;
+        } else if row.count > 1 {
+            let chev = Rect::from_center_size(Pos2::new(x + cw * 0.5, y), vec2(cw * 2.0, rect.height()));
+            painter.text(chev.center(), Align2::CENTER_CENTER, if row.expanded { "▾" } else { "▸" }, font(13.5), p.cyan);
+            if ui.interact(chev, id.with("chev"), Sense::click()).clicked() {
+                actions.push(ListAction::ToggleThread(m.thread_id.clone()));
+            }
+            x += 2.0 * cw;
+        }
+        let who = if m.folder_is_outgoing() {
+            format!("To: {}", first_recipient(&m.to).0)
+        } else {
+            m.sender().to_string()
+        };
+        let who = if row.count > 1 && !row.child { format!("{who} ({})", row.count) } else { who };
+        let date = util::fmt_list_date(m.snoozed_until.filter(|s| *s > m.date).unwrap_or(m.date));
+        let date_g = ui.painter().layout_no_wrap(date, text_font.clone(), main);
+        let size_g = ui.painter().layout_no_wrap(term_size(m.size), font(13.5), dim);
+        let from_end = if cols.narrow { cols.right - date_g.size().x - cw } else { cols.subject - cw };
+        let g = elided(ui, &who, text_font.clone(), main, from_end - x);
+        painter.galley(Pos2::new(x, y - g.size().y / 2.0), g, main);
+
+        // Subject and preview, with category squares at the end.
+        let (subject_x, mut end) = if cols.narrow {
+            (cols.from, cols.right - size_g.size().x - cw)
+        } else {
+            (cols.subject, cols.date - cw)
+        };
+        for cat in m.categories.iter().take(3) {
+            let c = self.cfg.category_color(cat);
+            painter.rect_filled(Rect::from_center_size(Pos2::new(end - 4.0, y2), vec2(8.0, 8.0)), CornerRadius::ZERO, c);
+            end -= 12.0;
+        }
+        let mut job = LayoutJob::default();
+        let fmt = |font_id: egui::FontId, color: Color32| TextFormat { font_id, color, ..Default::default() };
+        if m.importance == Importance::High {
+            job.append("! ", 0.0, fmt(font_semibold(13.5), p.danger));
+        }
+        if m.draft {
+            job.append("[Draft] ", 0.0, fmt(text_font.clone(), p.danger));
+        }
+        job.append(&m.subject_or_placeholder().replace(['\n', '\r'], " "), 0.0, fmt(text_font.clone(), main));
+        if row.show_preview && !row.child && !m.preview.is_empty() {
+            job.append(&format!(" — {}", m.preview.replace(['\n', '\r'], " ")), 0.0, fmt(font(13.5), dim));
+        }
+        job.wrap = TextWrapping {
+            max_width: (end - 6.0 - subject_x).max(10.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        };
+        let g = ui.painter().layout_job(job);
+        painter.galley(Pos2::new(subject_x, y2 - g.size().y / 2.0), g, main);
+        if cols.narrow {
+            painter.galley(Pos2::new(cols.right - size_g.size().x, y2 - size_g.size().y / 2.0), size_g.clone(), dim);
+        }
+
+        // Date and size, or quick actions under the pointer.
+        let actions_left = if cols.narrow { cols.right - 4.0 * 26.0 - cw * 0.5 } else { cols.date - cw * 0.5 };
+        if hovered && !row.select_mode {
+            let mut bx = cols.right - 4.0 * 26.0;
+            let buttons = [
+                (icons::TRASH, "Delete", 0),
+                (if m.seen { icons::ENVELOPE_SIMPLE } else { icons::ENVELOPE_SIMPLE_OPEN }, if m.seen { "Mark as unread" } else { "Mark as read" }, 1),
+                (icons::FLAG, if m.flagged { "Unflag" } else { "Flag" }, 2),
+                (icons::PUSH_PIN, if m.pinned { "Unpin" } else { "Pin" }, 3),
+            ];
+            let band = if cols.narrow { (y - 10.0, y + 10.0) } else { (rect.top(), rect.bottom()) };
+            painter.rect_filled(Rect::from_min_max(Pos2::new(actions_left, band.0), Pos2::new(cols.right + 4.0, band.1)), CornerRadius::ZERO, bg);
+            for (icon, tip, k) in buttons {
+                let r = Rect::from_center_size(Pos2::new(bx + 13.0, y), vec2(26.0, if cols.narrow { 20.0 } else { rect.height() }));
+                let br = ui.interact(r, id.with(("act", k)), Sense::click()).on_hover_text(tip);
+                if br.hovered() {
+                    painter.rect_filled(r, CornerRadius::ZERO, p.pressed);
+                }
+                let color = if k == 2 && m.flagged {
+                    p.flag
+                } else if k == 3 && m.pinned {
+                    p.cyan
+                } else {
+                    main
+                };
+                painter.text(r.center(), Align2::CENTER_CENTER, icon, icon_font(14.0), color);
+                if br.clicked() {
+                    let ids = vec![m.id];
+                    actions.push(match k {
+                        0 => ListAction::Cmd(MenuCmd::Delete, ids),
+                        1 => ListAction::Cmd(MenuCmd::MarkRead(!m.seen), ids),
+                        2 => ListAction::Cmd(MenuCmd::Flag(!m.flagged), ids),
+                        _ => ListAction::Cmd(MenuCmd::Pin(!m.pinned), ids),
+                    });
+                }
+                bx += 26.0;
+            }
+        } else if cols.narrow {
+            painter.galley(Pos2::new(cols.right - date_g.size().x, y - date_g.size().y / 2.0), date_g, main);
+        } else {
+            let date_x = cols.date;
+            if date_g.size().x <= cols.size - date_x - cw {
+                painter.galley(Pos2::new(date_x, y - date_g.size().y / 2.0), date_g, main);
+            } else {
+                let g = elided(ui, date_g.text(), text_font.clone(), main, cols.size - date_x - cw);
+                painter.galley(Pos2::new(date_x, y - g.size().y / 2.0), g, main);
+            }
+            painter.galley(Pos2::new(cols.right - size_g.size().x, y - size_g.size().y / 2.0), size_g, dim);
+        }
+
+        self.message_row_interactions(ui, &resp, m, selection, actions);
+    }
+}
+
+impl App {
+    /// Reply, reply all, forward and the "More actions" menu of a message.
+    /// Laid out right to left.
+    fn message_buttons(&self, ui: &mut Ui, s: &MessageSummary, ids: &[MsgId], acts: &mut Vec<ReadAction>) {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let more = widgets::icon_button(ui, icons::DOTS_THREE, "More actions");
+        egui::Popup::menu(&more).width(240.0).show(|ui| {
+            let mut out = Vec::new();
+            self.message_menu_items(ui, s, &mut out);
+            for c in out {
+                acts.push(ReadAction::Cmd(c, ids.to_vec()));
+            }
+        });
+        if widgets::icon_button(ui, icons::ARROW_BEND_UP_RIGHT, "Forward").clicked() {
+            acts.push(ReadAction::Cmd(MenuCmd::Forward, ids.to_vec()));
+        }
+        if widgets::icon_button(ui, icons::ARROW_BEND_DOUBLE_UP_LEFT, "Reply all").clicked() {
+            acts.push(ReadAction::Cmd(MenuCmd::ReplyAll, ids.to_vec()));
+        }
+        if widgets::icon_button(ui, icons::ARROW_BEND_UP_LEFT, "Reply").clicked() {
+            acts.push(ReadAction::Cmd(MenuCmd::Reply, ids.to_vec()));
+        }
+    }
+
+    /// The Terminal theme's message header: From, To, Cc, Date and Tags
+    /// lines with cyan labels, like the top of a message in a terminal.
+    fn term_message_header(&self, ui: &mut Ui, item: &ReadItem, s: &MessageSummary, ids: &[MsgId], acts: &mut Vec<ReadAction>) {
+        let p = pal();
+        let to = item.parsed.as_ref().map(|pm| Addr::list_to_string(&pm.to)).unwrap_or_else(|| s.to.clone());
+        let cc = item.parsed.as_ref().map(|pm| Addr::list_to_string(&pm.cc)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                self.message_buttons(ui, s, ids, acts);
+                ui.add_space(12.0);
+                ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let field = |ui: &mut Ui, label: &str, value: &str, color: Color32, font_id: egui::FontId| {
+                        let mut job = LayoutJob::default();
+                        job.append(&format!("{label:<6}"), 0.0, TextFormat { font_id: font_semibold(13.5), color: p.cyan, ..Default::default() });
+                        job.append(value, 8.0, TextFormat { font_id, color, ..Default::default() });
+                        job.wrap = TextWrapping { max_width: ui.available_width(), max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+                        ui.add(egui::Label::new(job).sense(Sense::click()))
+                    };
+                    let from = if s.from_addr.is_empty() || s.from_addr == s.sender() {
+                        s.sender().to_string()
+                    } else {
+                        format!("{} <{}>", s.sender(), s.from_addr)
+                    };
+                    if field(ui, "From:", &from, p.text, font_semibold(13.5)).on_hover_text("Click to copy the address").clicked() {
+                        ui.ctx().copy_text(s.from_addr.clone());
+                    }
+                    field(ui, "To:", &summarize_recipients(&to), p.text, font(13.5)).on_hover_text(&to);
+                    if !cc.is_empty() {
+                        field(ui, "Cc:", &summarize_recipients(&cc), p.text, font(13.5)).on_hover_text(&cc);
+                    }
+                    let mut date = util::fmt_full_date(s.date);
+                    if s.flagged {
+                        date.push_str("   [flagged]");
+                    }
+                    field(ui, "Date:", &date, p.text, font(13.5));
+                    if !s.categories.is_empty() {
+                        field(ui, "Tags:", &s.categories.join(", "), p.magenta, font(13.5));
+                    }
+                });
+            });
+        });
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 13.0), Sense::hover());
+        ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, p.rule));
+    }
+}

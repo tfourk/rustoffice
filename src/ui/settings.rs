@@ -495,6 +495,7 @@ impl App {
             Frame::NONE
                 .fill(p.card)
                 .corner_radius(CornerRadius::same(10))
+                .stroke(crate::theme::window_stroke())
                 .shadow(crate::theme::window_shadow()),
         );
         let resp = modal.show(ctx, |ui| {
@@ -922,8 +923,17 @@ impl App {
                         ThemeMode::Light => (theme::hex(0xF0F0F0), Color32::WHITE),
                         ThemeMode::Dark => (theme::hex(0x1A1A1A), theme::hex(0x292929)),
                         ThemeMode::System => (theme::hex(0x8A8A8A), theme::hex(0xD0D0D0)),
+                        ThemeMode::Terminal => (theme::Palette::terminal().bg, theme::Palette::terminal().bg),
                     };
                     ui.painter().rect_filled(preview, CornerRadius::same(4), bg);
+                    if t == ThemeMode::Terminal {
+                        terminal_preview(ui.painter(), preview);
+                        ui.painter().text(Pos2::new(rect.center().x, rect.bottom() - 18.0), Align2::CENTER_CENTER, t.label(), if sel { font_semibold(13.0) } else { font(13.0) }, p.text);
+                        if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                            self.cfg.appearance.theme = t;
+                        }
+                        continue;
+                    }
                     if t == ThemeMode::System {
                         let half = egui::Rect::from_min_max(preview.center_top(), preview.right_bottom());
                         ui.painter().rect_filled(half, CornerRadius { ne: 4, se: 4, nw: 0, sw: 0 }, theme::hex(0x1A1A1A));
@@ -941,6 +951,9 @@ impl App {
             });
         });
         group(ui, "Accent color", |ui| {
+            if self.cfg.appearance.theme == ThemeMode::Terminal {
+                ui.label(RichText::new("The Terminal theme has its own colors; the accent color applies to the other themes.").font(font(12.5)).color(p.text3));
+            }
             ui.horizontal_wrapped(|ui| {
                 for a in Accent::ALL {
                     let sel = self.cfg.appearance.accent == a;
@@ -1409,5 +1422,51 @@ impl App {
                 self.toast("Search index optimized", ToastKind::Success);
             }
         });
+    }
+}
+
+/// A tiny picture of the Terminal theme for its card in the theme picker:
+/// boxed panes, a green folder highlight and a blue selection bar.
+fn terminal_preview(painter: &egui::Painter, area: egui::Rect) {
+    let t = theme::Palette::terminal();
+    let line = Stroke::new(1.0, t.stroke_strong);
+    let bar = |x: f32, y: f32, w: f32, c: Color32| {
+        painter.rect_filled(egui::Rect::from_min_size(Pos2::new(x, y), vec2(w, 3.0)), CornerRadius::ZERO, c);
+    };
+    let inner = area.shrink(3.0);
+    painter.rect_stroke(inner, CornerRadius::ZERO, line, egui::StrokeKind::Inside);
+    // Title line.
+    let title_y = inner.top() + 9.0;
+    painter.hline(inner.x_range(), title_y, line);
+    bar(inner.left() + 4.0, inner.top() + 3.0, 6.0, t.text3);
+    bar(inner.left() + 12.0, inner.top() + 3.0, 22.0, t.success);
+    bar(inner.right() - 22.0, inner.top() + 3.0, 18.0, t.success);
+    // Folder pane.
+    let split = inner.left() + 36.0;
+    painter.vline(split, title_y..=inner.bottom(), line);
+    painter.rect_filled(
+        egui::Rect::from_min_size(Pos2::new(inner.left() + 3.0, title_y + 4.0), vec2(30.0, 6.0)),
+        CornerRadius::ZERO,
+        t.accent,
+    );
+    for k in 0..4 {
+        let y = title_y + 14.0 + k as f32 * 7.0;
+        bar(inner.left() + 5.0, y, 16.0, t.text3);
+        bar(inner.left() + 25.0, y, 6.0, t.yellow);
+    }
+    // Message list with the selected row.
+    let x = split + 4.0;
+    let w = inner.right() - 4.0 - x;
+    painter.rect_filled(
+        egui::Rect::from_min_size(Pos2::new(split + 1.0, title_y + 4.0), vec2(inner.right() - split - 2.0, 6.0)),
+        CornerRadius::ZERO,
+        t.selected,
+    );
+    bar(x, title_y + 5.5, w * 0.8, t.text);
+    for k in 0..5 {
+        let y = title_y + 14.0 + k as f32 * 7.0;
+        bar(x, y, 3.0, if k % 2 == 0 { t.success } else { t.text3 });
+        bar(x + 6.0, y, w * 0.3, t.text2);
+        bar(x + 9.0 + w * 0.3, y, w * 0.45, t.text3);
     }
 }

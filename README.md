@@ -109,8 +109,8 @@ suggested contacts collected from mail you send; vCard import/export.
 **To Do** — My Day, Important, Planned, Flagged email (completing one clears the flag),
 custom lists, due dates, reminders and notes.
 
-**Look and feel** — light / dark / system theme, eight accent colours, Compact / Cozy /
-Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
+**Look and feel** — light / dark / system theme, a **Terminal** theme (see below), eight
+accent colours, Compact / Cozy / Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
 window decorations), resizable panes that remember their size.
 
 ### Slim toolbar
@@ -122,6 +122,29 @@ read / unread, flag — and a **⋯** menu on the right with everything else: pi
 categorize, junk, sweep, send / receive, layout, density, theme, zoom, settings and help.
 **Show the full ribbon** in that menu switches back. Keyboard shortcuts work the same in
 both.
+
+### Terminal theme
+
+Settings → Appearance → **Terminal** (or View → Theme) makes RustMail look like a mail
+reader running in a terminal: monospace text, square boxes with cyan lines, green
+headings, yellow counts and a blue selection bar.
+
+![Terminal theme](docs/screenshots/terminal.png)
+
+- A line under the title shows the account, the open mailbox with its unread and total
+  counts, the computer's name and the connection.
+- Messages are listed one per line in columns: number, new / flagged / attachment
+  marks, From, Subject (with the start of the message), Date and Size. When the list is
+  narrow, each message takes two lines instead.
+- Folders show their counts as `[6]`, and a Status box under them shows the last sync,
+  unread mail and the size of the mail database.
+- The reading pane starts with From, To, Cc, Date and Tags lines.
+- A bar of keys above the status line lists the shortcuts for what you're doing; each
+  key can also be clicked. **F1** shows all keyboard shortcuts.
+
+Choosing the Terminal theme moves the reading pane below the list, where the columns
+have room; View → Layout moves it back. The theme has its own colours, so the accent
+colour setting doesn't apply to it.
 
 ![Slim toolbar with its menu open](docs/screenshots/slim.png)
 
@@ -180,7 +203,7 @@ username = "jane@example.com"
 ```
 
 Command-line options: `--demo`, `--data-dir DIR`, `--module mail|calendar|people|todo`,
-`--theme light|dark`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
+`--theme light|dark|terminal`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
 `--google-setup`, `--import-outlook FILE`, `--help`.
 
 ### Google accounts (Gmail, Google Workspace)

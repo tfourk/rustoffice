@@ -18,10 +18,23 @@ pub fn card() -> Frame {
         .stroke(Stroke::new(1.0, if p.dark { p.stroke } else { mix(p.stroke, p.card, 0.4) }))
 }
 
+/// A round dot, or a square one in the Terminal theme.
+pub fn dot(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
+    if pal().term {
+        painter.rect_filled(Rect::from_center_size(center, vec2(radius * 1.8, radius * 1.8)), CornerRadius::ZERO, color);
+    } else {
+        painter.circle_filled(center, radius, color);
+    }
+}
+
 pub fn paint_avatar(painter: &egui::Painter, center: Pos2, radius: f32, name: &str, email: &str) {
     let seed = if email.is_empty() { name } else { email };
     let bg = theme::color_for(seed);
-    painter.circle_filled(center, radius, bg);
+    if pal().term {
+        painter.rect_filled(Rect::from_center_size(center, vec2(radius * 2.0, radius * 2.0)), CornerRadius::ZERO, bg);
+    } else {
+        painter.circle_filled(center, radius, bg);
+    }
     let text = util::initials(name, email);
     painter.text(
         center,
@@ -323,15 +336,17 @@ pub fn subtle_button(ui: &mut Ui, icon: &str, label: &str) -> Response {
 /// Text link styled with the accent colour.
 pub fn link(ui: &mut Ui, text: &str) -> Response {
     let p = pal();
+    // Terminal links are cyan and always underlined.
+    let color = if p.term { p.cyan } else { p.accent_text };
     let resp = ui.add(
-        egui::Label::new(RichText::new(text).color(p.accent_text))
+        egui::Label::new(RichText::new(text).color(color))
             .sense(Sense::click())
             .selectable(false),
     );
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-    if resp.hovered() {
+    if resp.hovered() || p.term {
         let r = resp.rect;
-        ui.painter().hline(r.x_range(), r.bottom() - 1.0, Stroke::new(1.0, p.accent_text));
+        ui.painter().hline(r.x_range(), r.bottom() - 1.0, Stroke::new(1.0, color));
     }
     resp
 }
@@ -455,11 +470,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
         ui.painter().rect_stroke(rect, CornerRadius::same(radius as u8), stroke, StrokeKind::Inside);
     }
     let x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), t);
-    ui.painter().circle_filled(
-        Pos2::new(x, rect.center().y),
-        radius - 5.0,
-        if *on { p.on_accent } else { p.text2 },
-    );
+    dot(ui.painter(), Pos2::new(x, rect.center().y), radius - 5.0, if *on { p.on_accent } else { p.text2 });
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -490,8 +501,7 @@ pub fn chip(ui: &mut Ui, text: &str, color: Color32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 22.0, 20.0), Sense::click());
     let bg = if p.dark { mix(p.card, color, 0.35) } else { mix(Color32::WHITE, color, 0.22) };
     ui.painter().rect_filled(rect, CornerRadius::same(10), bg);
-    ui.painter()
-        .circle_filled(Pos2::new(rect.left() + 9.0, rect.center().y), 4.0, color);
+    dot(ui.painter(), Pos2::new(rect.left() + 9.0, rect.center().y), 4.0, color);
     ui.painter().galley(
         Pos2::new(rect.left() + 16.0, rect.center().y - galley.size().y / 2.0),
         galley,
@@ -535,6 +545,20 @@ pub fn paint_round_check(
     color: Color32,
     ring: Color32,
 ) {
+    if pal().term {
+        // A square check box.
+        let rect = Rect::from_center_size(center, vec2(r * 1.7, r * 1.7));
+        if checked {
+            painter.rect_filled(rect, CornerRadius::ZERO, color);
+            painter.text(center, Align2::CENTER_CENTER, icons::CHECK, icon_font(r * 1.15), pal().on_accent);
+        } else {
+            painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.5, if hovered { color } else { ring }), StrokeKind::Inside);
+            if hovered {
+                painter.text(center, Align2::CENTER_CENTER, icons::CHECK, icon_font(r * 1.05), color);
+            }
+        }
+        return;
+    }
     if checked {
         painter.circle_filled(center, r, color);
         painter.text(center, Align2::CENTER_CENTER, icons::CHECK, icon_font(r * 1.15), Color32::WHITE);
@@ -552,14 +576,19 @@ pub fn empty_state(ui: &mut Ui, icon: &str, title: &str, subtitle: &str) {
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.28).max(20.0));
         let (rect, _) = ui.allocate_exact_size(vec2(96.0, 96.0), Sense::hover());
-        ui.painter().circle_filled(rect.center(), 46.0, p.accent_soft);
-        ui.painter().text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            icon,
-            icon_fill_font(44.0),
-            with_alpha(p.accent, 200),
-        );
+        if p.term {
+            ui.painter().rect_stroke(rect.shrink(4.0), CornerRadius::ZERO, Stroke::new(1.0, p.stroke), StrokeKind::Inside);
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon, icon_font(40.0), p.accent_text);
+        } else {
+            ui.painter().circle_filled(rect.center(), 46.0, p.accent_soft);
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                icon,
+                icon_fill_font(44.0),
+                with_alpha(p.accent, 200),
+            );
+        }
         ui.add_space(14.0);
         ui.label(RichText::new(title).font(font_semibold(17.0)).color(p.text));
         if !subtitle.is_empty() {

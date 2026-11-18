@@ -91,6 +91,7 @@ impl App {
                 .fill(p.card)
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::same(24))
+                .stroke(crate::theme::window_stroke())
                 .shadow(crate::theme::window_shadow()),
         );
         modal.show(ctx, |ui| {

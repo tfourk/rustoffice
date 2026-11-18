@@ -136,7 +136,10 @@ pub struct App {
     pub search: String,
     pub focus_search: bool,
     pub cfg_dirty_at: Option<f64>,
-    pub applied_theme: Option<(bool, theme::Accent, theme::Density)>,
+    /// (dark, terminal, accent, density) last handed to `theme::apply`.
+    pub applied_theme: Option<(bool, bool, theme::Accent, theme::Density)>,
+    /// Whether the installed fonts are the Terminal theme's monospace ones.
+    fonts_terminal: bool,
     pub applied_zoom: f32,
     pub font_family: String,
     pub last_reminder_check: i64,
@@ -154,10 +157,11 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, start: StartOptions) -> App {
         let ctx = cc.egui_ctx.clone();
-        let font_family = crate::fonts::install(&ctx);
         egui_extras::install_image_loaders(&ctx);
 
         let (mut cfg, cfg_error) = AppConfig::load();
+        let fonts_terminal = start.theme.unwrap_or(cfg.appearance.theme) == ThemeMode::Terminal;
+        let font_family = crate::fonts::install(&ctx, fonts_terminal);
         let paths = Paths::get();
         crate::dragout::clean(&paths.data_dir);
         let store = Store::open(&paths.db_file()).unwrap_or_else(|e| {
@@ -204,6 +208,7 @@ impl App {
             focus_search: false,
             cfg_dirty_at: None,
             applied_theme: None,
+            fonts_terminal,
             applied_zoom: 0.0,
             font_family,
             last_reminder_check: util::now_ts(),
@@ -611,16 +616,29 @@ impl App {
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
-        let dark = match self.start.theme.unwrap_or(self.cfg.appearance.theme) {
+        let mode = self.start.theme.unwrap_or(self.cfg.appearance.theme);
+        let terminal = mode == ThemeMode::Terminal;
+        let dark = match mode {
             ThemeMode::Light => false,
-            ThemeMode::Dark => true,
+            ThemeMode::Dark | ThemeMode::Terminal => true,
             ThemeMode::System => ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(false),
         };
-        let key = (dark, self.cfg.appearance.accent, self.cfg.appearance.density);
+        let key = (dark, terminal, self.cfg.appearance.accent, self.cfg.appearance.density);
         if self.applied_theme != Some(key) {
-            theme::apply(ctx, dark, self.cfg.appearance.accent, self.cfg.appearance.density);
+            theme::apply(ctx, dark, terminal, self.cfg.appearance.accent, self.cfg.appearance.density);
             self.applied_theme = Some(key);
             self.dark = dark;
+        }
+        if self.fonts_terminal != terminal {
+            self.font_family = crate::fonts::install(ctx, terminal);
+            self.fonts_terminal = terminal;
+            // The Terminal theme lists one message per line, which needs
+            // the list's full width: put the reading pane below it.
+            if terminal && self.cfg.mail.reading_pane == crate::config::ReadingPanePos::Right {
+                self.cfg.mail.reading_pane = crate::config::ReadingPanePos::Bottom;
+                self.mark_config_dirty();
+                self.toast("Messages now open below the list. To change it, use View → Layout.", ToastKind::Info);
+            }
         }
         let zoom = self.cfg.appearance.zoom.clamp(0.7, 2.0);
         if (self.applied_zoom - zoom).abs() > 0.001 {
@@ -661,6 +679,9 @@ impl App {
         }
         if pressed(cmd(Key::Comma)) {
             self.settings = Some(SettingsState::default());
+        }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F1)) {
+            self.dialog = Some(Dialog::Shortcuts);
         }
         if pressed(cmd(Key::N)) {
             match self.module {
@@ -795,6 +816,9 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         self.draw(ui);
         self.drag_out(&ctx);
+        if theme::terminal() {
+            theme::square_corners(&ctx);
+        }
         self.screenshot_hook(&ctx);
     }
 

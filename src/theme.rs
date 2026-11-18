@@ -15,15 +15,19 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
+    /// Monospace text, square boxes and terminal colours, as if the app
+    /// were running in a terminal window.
+    Terminal,
 }
 
 impl ThemeMode {
-    pub const ALL: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+    pub const ALL: [ThemeMode; 4] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark, ThemeMode::Terminal];
     pub fn label(self) -> &'static str {
         match self {
             ThemeMode::System => "Use system setting",
             ThemeMode::Light => "Light",
             ThemeMode::Dark => "Dark",
+            ThemeMode::Terminal => "Terminal",
         }
     }
 }
@@ -130,6 +134,8 @@ pub fn with_alpha(c: Color32, alpha: u8) -> Color32 {
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     pub dark: bool,
+    /// The Terminal theme: monospace text, square corners, no shadows.
+    pub term: bool,
     pub bg: Color32,
     pub card: Color32,
     pub card_alt: Color32,
@@ -160,6 +166,13 @@ pub struct Palette {
     pub flagged_row: Color32,
     pub pinned_row: Color32,
     pub shadow: Color32,
+    /// Extra terminal colours. The light and dark themes map them to their
+    /// nearest existing colours.
+    pub cyan: Color32,
+    pub magenta: Color32,
+    pub yellow: Color32,
+    /// Column dividers and other faint rules.
+    pub rule: Color32,
 }
 
 impl Palette {
@@ -199,6 +212,11 @@ impl Palette {
                 flagged_row: hex(0xFFF8E6),
                 pinned_row: mix(base, card, 0.95),
                 shadow: Color32::from_black_alpha(28),
+                term: false,
+                cyan: base,
+                magenta: hex(0xAD2D8C),
+                yellow: hex(0x8A5300),
+                rule: hex(0xE0E0E0),
             }
         } else {
             let card = hex(0x292929);
@@ -235,13 +253,83 @@ impl Palette {
                 flagged_row: hex(0x3A3422),
                 pinned_row: mix(card, base, 0.10),
                 shadow: Color32::from_black_alpha(90),
+                term: false,
+                cyan: mix(base, Color32::WHITE, 0.45),
+                magenta: hex(0xE08AD0),
+                yellow: hex(0xF4BF4F),
+                rule: hex(0x3D3D3D),
             }
+        }
+    }
+
+    /// The Terminal theme: a near-black screen with cyan box lines, green
+    /// headings, yellow counts, magenta tags and a blue selection bar. It
+    /// has its own colours, so the accent colour setting doesn't apply.
+    pub fn terminal() -> Self {
+        let bg = hex(0x03080F);
+        let green = hex(0x66E655);
+        let cyan = hex(0x3EE6E8);
+        let blue = hex(0x00227A);
+        Palette {
+            dark: true,
+            term: true,
+            bg,
+            card: bg,
+            card_alt: hex(0x070E18),
+            sunken: hex(0x070E18),
+            hover: hex(0x0E1A2B),
+            pressed: hex(0x16263D),
+            stroke: hex(0x1F8E91),
+            stroke_strong: hex(0x2FD9DC),
+            text: hex(0xF4F8FC),
+            text2: hex(0xC9D1DA),
+            text3: hex(0x83888D),
+            disabled: hex(0x474C52),
+            accent: hex(0x3A9560),
+            accent_hover: hex(0x45AD70),
+            accent_pressed: hex(0x2F7A4F),
+            on_accent: bg,
+            accent_text: green,
+            selected: blue,
+            selected_hover: hex(0x0A2F94),
+            accent_soft: hex(0x0B2216),
+            danger: hex(0xFF5F5F),
+            danger_soft: hex(0x2A0C10),
+            warning: hex(0xFFD028),
+            warning_soft: hex(0x261F05),
+            success: hex(0x3FE56A),
+            success_soft: hex(0x0A2412),
+            flag: hex(0xFFD028),
+            flagged_row: bg,
+            pinned_row: bg,
+            shadow: Color32::TRANSPARENT,
+            cyan,
+            magenta: hex(0xD77ADE),
+            yellow: hex(0xFFD028),
+            rule: hex(0x3B4046),
         }
     }
 }
 
 static PALETTE: RwLock<Option<Palette>> = RwLock::new(None);
 static DENSITY: RwLock<Density> = RwLock::new(Density::Cozy);
+
+/// Whether the Terminal theme is in effect.
+pub fn terminal() -> bool {
+    pal().term
+}
+
+/// Monospace faces look larger than the UI font at the same size, so the
+/// Terminal theme draws text a little smaller.
+const TERM_TEXT_SCALE: f32 = 0.9;
+
+fn text_size(size: f32) -> f32 {
+    if terminal() {
+        (size * TERM_TEXT_SCALE).round()
+    } else {
+        size
+    }
+}
 
 /// The palette currently in effect.
 pub fn pal() -> Palette {
@@ -261,13 +349,13 @@ pub const BOLD: &str = "bold";
 pub const ICONS_FILL: &str = "icons_fill";
 
 pub fn font(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Proportional)
+    FontId::new(text_size(size), FontFamily::Proportional)
 }
 pub fn font_semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+    FontId::new(text_size(size), FontFamily::Name(SEMIBOLD.into()))
 }
 pub fn font_bold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name(BOLD.into()))
+    FontId::new(text_size(size), FontFamily::Name(BOLD.into()))
 }
 pub fn icon_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
@@ -277,8 +365,8 @@ pub fn icon_fill_font(size: f32) -> FontId {
 }
 
 /// Install the palette and derive egui's style from it.
-pub fn apply(ctx: &egui::Context, dark: bool, accent: Accent, dens: Density) {
-    let p = Palette::new(dark, accent);
+pub fn apply(ctx: &egui::Context, dark: bool, terminal: bool, accent: Accent, dens: Density) {
+    let p = if terminal { Palette::terminal() } else { Palette::new(dark, accent) };
     if let Ok(mut w) = PALETTE.write() {
         *w = Some(p);
     }
@@ -289,7 +377,7 @@ pub fn apply(ctx: &egui::Context, dark: bool, accent: Accent, dens: Density) {
     // Same style for both egui themes; we choose light/dark ourselves.
     ctx.set_style_of(egui::Theme::Light, style.clone());
     ctx.set_style_of(egui::Theme::Dark, style);
-    ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.set_theme(if p.dark { egui::Theme::Dark } else { egui::Theme::Light });
 }
 
 fn build_style(p: &Palette) -> Style {
@@ -400,6 +488,10 @@ fn build_style(p: &Palette) -> Style {
     w.open.fg_stroke = Stroke::new(1.0, p.text);
     w.open.corner_radius = r;
 
+    if p.term {
+        terminal_visuals(&mut v, p);
+    }
+
     style.visuals = v;
     style.animation_time = 0.12;
     style.interaction.tooltip_delay = 0.45;
@@ -407,12 +499,78 @@ fn build_style(p: &Palette) -> Style {
     style
 }
 
+/// Square corners, box lines and no shadows for the Terminal theme.
+fn terminal_visuals(v: &mut Visuals, p: &Palette) {
+    v.window_corner_radius = CornerRadius::ZERO;
+    v.menu_corner_radius = CornerRadius::ZERO;
+    v.window_shadow = Shadow::NONE;
+    v.popup_shadow = Shadow::NONE;
+    v.window_stroke = Stroke::new(1.0, p.stroke_strong);
+    v.window_fill = p.bg;
+    v.extreme_bg_color = p.sunken;
+    v.text_edit_bg_color = Some(p.sunken);
+    v.hyperlink_color = p.cyan;
+    v.selection.bg_fill = p.selected;
+    v.selection.stroke = Stroke::new(1.0, p.text);
+    v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.6 };
+    v.text_cursor.stroke = Stroke::new(2.0, p.success);
+    let w = &mut v.widgets;
+    for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+        state.corner_radius = CornerRadius::ZERO;
+    }
+    w.noninteractive.bg_stroke = Stroke::new(1.0, p.stroke);
+    w.inactive.bg_stroke = Stroke::new(1.0, p.stroke);
+    w.hovered.bg_stroke = Stroke::new(1.0, p.stroke_strong);
+    w.hovered.fg_stroke = Stroke::new(1.0, p.cyan);
+    w.active.bg_stroke = Stroke::new(1.0, p.cyan);
+    w.open.bg_stroke = Stroke::new(1.0, p.stroke_strong);
+}
+
+/// Makes every rectangle painted this frame square. The Terminal theme
+/// calls it once the frame is drawn, so the many rounded cards, buttons
+/// and highlights across the app need no changes of their own.
+pub fn square_corners(ctx: &egui::Context) {
+    fn square(shape: &mut egui::Shape) {
+        match shape {
+            egui::Shape::Rect(r) => r.corner_radius = CornerRadius::ZERO,
+            egui::Shape::Vec(list) => list.iter_mut().for_each(square),
+            _ => {}
+        }
+    }
+    let mut layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().collect());
+    layers.push(egui::LayerId::background());
+    ctx.graphics_mut(|g| {
+        for id in layers {
+            if let Some(list) = g.get_mut(id) {
+                for i in 0..list.next_idx().0 {
+                    list.mutate_shape(egui::layers::ShapeIdx(i), |s| square(&mut s.shape));
+                }
+            }
+        }
+    });
+}
+
+/// Border of dialogs: none, or a box line in the Terminal theme, where
+/// dialogs have no shadow to set them apart.
+pub fn window_stroke() -> Stroke {
+    let p = pal();
+    if p.term {
+        Stroke::new(1.0, p.stroke_strong)
+    } else {
+        Stroke::NONE
+    }
+}
+
 pub fn window_shadow() -> Shadow {
+    let p = pal();
+    if p.term {
+        return Shadow::NONE;
+    }
     Shadow {
         offset: [0, 8],
         blur: 28,
         spread: 0,
-        color: pal().shadow,
+        color: p.shadow,
     }
 }
 
