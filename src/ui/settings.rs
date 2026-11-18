@@ -929,7 +929,7 @@ impl App {
                     if t == ThemeMode::Terminal {
                         terminal_preview(ui.painter(), preview);
                         ui.painter().text(Pos2::new(rect.center().x, rect.bottom() - 18.0), Align2::CENTER_CENTER, t.label(), if sel { font_semibold(13.0) } else { font(13.0) }, p.text);
-                        if r.on_hover_text("Inspired by BS-Mail by IronWolve").on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        if r.on_hover_text("Look inspired by BS-Mail by IronWolve (not affiliated); see Settings → About").on_hover_cursor(CursorIcon::PointingHand).clicked() {
                             self.cfg.appearance.theme = t;
                         }
                         continue;
@@ -1415,7 +1415,6 @@ impl App {
         });
         group(ui, "Credits", |ui| {
             self.term_credit_link(ui);
-            ui.label(RichText::new("RustMail uses none of BS-Mail's code or files, and is not affiliated with or endorsed by BS-Mail or IronWolve.").font(font(12.5)).color(p.text3));
         });
         ui.horizontal(|ui| {
             if widgets::secondary_button(ui, Some(icons::FOLDER), "Open data folder").clicked() {
