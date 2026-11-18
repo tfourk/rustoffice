@@ -912,7 +912,7 @@ impl App {
     fn settings_appearance(&mut self, ui: &mut Ui) {
         let p = pal();
         group(ui, "Theme", |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for t in ThemeMode::ALL {
                     let sel = self.cfg.appearance.theme == t;
                     let (rect, r) = ui.allocate_exact_size(vec2(150.0, 110.0), Sense::click());
@@ -924,10 +924,18 @@ impl App {
                         ThemeMode::Dark => (theme::hex(0x1A1A1A), theme::hex(0x292929)),
                         ThemeMode::System => (theme::hex(0x8A8A8A), theme::hex(0xD0D0D0)),
                         ThemeMode::Terminal => (theme::Palette::terminal().bg, theme::Palette::terminal().bg),
+                        ThemeMode::NeonSunset => (theme::Palette::neon_sunset().bg, theme::Palette::neon_sunset().card),
+                        ThemeMode::Cyberpunk => (theme::Palette::cyberpunk().bg, theme::Palette::cyberpunk().card),
                     };
                     ui.painter().rect_filled(preview, CornerRadius::same(4), bg);
-                    if t == ThemeMode::Terminal {
-                        terminal_preview(ui.painter(), preview);
+                    let own_preview: Option<fn(&egui::Painter, egui::Rect)> = match t {
+                        ThemeMode::Terminal => Some(terminal_preview),
+                        ThemeMode::NeonSunset => Some(sunset_preview),
+                        ThemeMode::Cyberpunk => Some(cyber_preview),
+                        _ => None,
+                    };
+                    if let Some(draw_preview) = own_preview {
+                        draw_preview(ui.painter(), preview);
                         ui.painter().text(Pos2::new(rect.center().x, rect.bottom() - 18.0), Align2::CENTER_CENTER, t.label(), if sel { font_semibold(13.0) } else { font(13.0) }, p.text);
                         if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                             self.cfg.appearance.theme = t;
@@ -951,8 +959,9 @@ impl App {
             });
         });
         group(ui, "Accent color", |ui| {
-            if self.cfg.appearance.theme == ThemeMode::Terminal {
-                ui.label(RichText::new("The Terminal theme has its own colors; the accent color applies to the other themes.").font(font(12.5)).color(p.text3));
+            let mode = self.cfg.appearance.theme;
+            if mode.own_colors() {
+                ui.label(RichText::new(format!("The {} theme has its own colors; the accent color applies to Light and Dark.", mode.label())).font(font(12.5)).color(p.text3));
             }
             ui.horizontal_wrapped(|ui| {
                 for a in Accent::ALL {
@@ -1468,5 +1477,119 @@ fn terminal_preview(painter: &egui::Painter, area: egui::Rect) {
         bar(x, y, 3.0, if k % 2 == 0 { t.success } else { t.text3 });
         bar(x + 6.0, y, w * 0.3, t.text2);
         bar(x + 9.0 + w * 0.3, y, w * 0.45, t.text3);
+    }
+}
+
+/// A tiny picture of the Neon Sunset theme: a dusk sky fading into a
+/// striped sun over a teal horizon, with a pink selection bar.
+fn sunset_preview(painter: &egui::Painter, area: egui::Rect) {
+    let t = theme::Palette::neon_sunset();
+    let horizon = area.bottom() - 16.0;
+    // Sky and sea as one rounded mesh, like the other previews' corners.
+    let dusk = theme::mix(t.bg, t.magenta, 0.55);
+    rounded_vertical_gradient(painter, area, 4.0, &[(0.0, t.bg), (0.55, dusk), ((horizon - area.top()) / area.height(), t.yellow), ((horizon - area.top()) / area.height() + 0.001, t.bg), (1.0, t.bg)]);
+    // The sun: a half disc cut by dusk-coloured stripes, each as wide as
+    // the disc where it crosses it.
+    let sun = egui::Pos2::new(area.center().x + 18.0, horizon);
+    let r = 16.0;
+    widgets::paint_sun_disc(painter, sun, r);
+    for k in 0..3 {
+        let y = (horizon - 3.0 - k as f32 * 5.0).round();
+        let half = (r * r - (sun.y - y) * (sun.y - y)).max(0.0).sqrt();
+        painter.rect_filled(egui::Rect::from_min_max(egui::Pos2::new(sun.x - half, y - 1.0), egui::Pos2::new(sun.x + half, y + 1.0)), CornerRadius::ZERO, dusk);
+    }
+    // Hide the sun's lower half below the horizon, inside the tile.
+    painter.rect_filled(egui::Rect::from_min_max(egui::Pos2::new(sun.x - r - 1.0, horizon), egui::Pos2::new(sun.x + r + 1.0, area.bottom())), CornerRadius::ZERO, t.bg);
+    painter.hline((area.left() + 2.0)..=(area.right() - 2.0), horizon, Stroke::new(1.5, t.cyan));
+    // A list with one selected row.
+    let list = egui::Rect::from_min_size(area.left_top() + vec2(8.0, 8.0), vec2(44.0, 30.0));
+    painter.rect_filled(list, CornerRadius::same(3), t.card);
+    painter.rect_filled(egui::Rect::from_min_size(list.left_top() + vec2(3.0, 4.0), vec2(38.0, 6.0)), CornerRadius::same(2), t.selected);
+    for k in 0..2 {
+        painter.rect_filled(egui::Rect::from_min_size(list.left_top() + vec2(5.0, 15.0 + k as f32 * 7.0), vec2(30.0, 3.0)), CornerRadius::ZERO, t.text3);
+    }
+}
+
+/// Fills a rectangle with rounded corners with a top-to-bottom gradient
+/// through `stops` (position 0..1, colour), as one mesh.
+fn rounded_vertical_gradient(painter: &egui::Painter, rect: egui::Rect, radius: f32, stops: &[(f32, Color32)]) {
+    let at = |y: f32| {
+        let t = ((y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+        let i = stops.iter().rposition(|s| s.0 <= t).unwrap_or(0);
+        match stops.get(i + 1) {
+            Some(next) if next.0 > stops[i].0 => theme::mix(stops[i].1, next.1, (t - stops[i].0) / (next.0 - stops[i].0)),
+            _ => stops[i].1,
+        }
+    };
+    // Outline: a quarter circle at each corner, then the edges between them,
+    // with a row of points across the inside at every stop so the
+    // gradient's bends fall on vertices.
+    let mut outline = Vec::new();
+    for (corner, start) in [
+        (egui::Pos2::new(rect.right() - radius, rect.top() + radius), -90.0f32),
+        (egui::Pos2::new(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (egui::Pos2::new(rect.left() + radius, rect.bottom() - radius), 90.0),
+        (egui::Pos2::new(rect.left() + radius, rect.top() + radius), 180.0),
+    ] {
+        for k in 0..=4 {
+            let a = (start + k as f32 * 22.5).to_radians();
+            outline.push(corner + vec2(a.cos(), a.sin()) * radius);
+        }
+    }
+    let mut mesh = egui::Mesh::default();
+    // Horizontal strips between consecutive y values (corners and stops),
+    // each clipped to the outline's width at that y.
+    let mut ys: Vec<f32> = outline.iter().map(|p| p.y).chain(stops.iter().map(|s| rect.top() + s.0 * rect.height())).collect();
+    ys.sort_by(f32::total_cmp);
+    ys.dedup_by(|a, b| (*a - *b).abs() < 0.05);
+    let width_at = |y: f32| {
+        let dy = if y < rect.top() + radius {
+            rect.top() + radius - y
+        } else if y > rect.bottom() - radius {
+            y - (rect.bottom() - radius)
+        } else {
+            0.0
+        };
+        let inset = radius - (radius * radius - dy * dy).max(0.0).sqrt();
+        (rect.left() + inset, rect.right() - inset)
+    };
+    for y in &ys {
+        let (l, r) = width_at(*y);
+        let c = at(*y);
+        mesh.colored_vertex(egui::Pos2::new(l, *y), c);
+        mesh.colored_vertex(egui::Pos2::new(r, *y), c);
+    }
+    for i in 0..(ys.len() as u32).saturating_sub(1) {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 3, k + 2);
+    }
+    painter.add(mesh);
+}
+
+/// A tiny picture of the Cyberpunk theme: cut-corner panels with glowing
+/// cyan edges and an acid-yellow bar on a near-black screen.
+fn cyber_preview(painter: &egui::Painter, area: egui::Rect) {
+    let t = theme::Palette::cyberpunk();
+    let panel = |r: egui::Rect, cut: f32, fill: Color32, line: Color32| {
+        let points = vec![
+            egui::Pos2::new(r.left() + cut, r.top()),
+            r.right_top(),
+            egui::Pos2::new(r.right(), r.bottom() - cut),
+            egui::Pos2::new(r.right() - cut, r.bottom()),
+            r.left_bottom(),
+            egui::Pos2::new(r.left(), r.top() + cut),
+        ];
+        painter.add(egui::epaint::PathShape::convex_polygon(points, fill, Stroke::new(1.0, line)));
+    };
+    let left = egui::Rect::from_min_size(area.left_top() + vec2(6.0, 8.0), vec2(36.0, 46.0));
+    let right = egui::Rect::from_min_size(area.left_top() + vec2(48.0, 8.0), vec2(72.0, 46.0));
+    panel(left, 6.0, t.card, t.stroke_strong);
+    panel(right, 8.0, t.card, t.cyan);
+    panel(egui::Rect::from_min_size(left.left_top() + vec2(4.0, 6.0), vec2(28.0, 7.0)), 3.0, t.accent, t.accent);
+    painter.rect_filled(egui::Rect::from_min_size(right.left_top() + vec2(6.0, 6.0), vec2(40.0, 4.0)), CornerRadius::ZERO, t.yellow);
+    for k in 0..3 {
+        let y = right.top() + 16.0 + k as f32 * 8.0;
+        painter.rect_filled(egui::Rect::from_min_size(egui::Pos2::new(right.left() + 6.0, y), vec2(52.0 - k as f32 * 10.0, 3.0)), CornerRadius::ZERO, if k == 0 { t.magenta } else { t.text3 });
     }
 }
