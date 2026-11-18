@@ -937,6 +937,12 @@ impl App {
                     if let Some(draw_preview) = own_preview {
                         draw_preview(ui.painter(), preview);
                         ui.painter().text(Pos2::new(rect.center().x, rect.bottom() - 18.0), Align2::CENTER_CENTER, t.label(), if sel { font_semibold(13.0) } else { font(13.0) }, p.text);
+                        // Only the Terminal theme's look came from BS-Mail.
+                        let r = if t == ThemeMode::Terminal {
+                            r.on_hover_text("Look inspired by BS-Mail by IronWolve (not affiliated); see Settings → About")
+                        } else {
+                            r
+                        };
                         if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                             self.cfg.appearance.theme = t;
                         }
@@ -1421,6 +1427,9 @@ impl App {
             ui.label(RichText::new(format!("Mail data: {}", paths.db_file().display())).font(font(12.5)).color(p.text3));
             ui.label(RichText::new(format!("Passwords: {}", secrets::backend_name())).font(font(12.5)).color(p.text3));
             ui.label(RichText::new(format!("Interface font: {}", self.font_family)).font(font(12.5)).color(p.text3));
+        });
+        group(ui, "Credits", |ui| {
+            self.term_credit_link(ui);
         });
         ui.horizontal(|ui| {
             if widgets::secondary_button(ui, Some(icons::FOLDER), "Open data folder").clicked() {

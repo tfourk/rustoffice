@@ -2,6 +2,11 @@
 //! facts under the title bar, a bar of clickable shortcut keys, a status
 //! line at the bottom and box lines around the window, all drawn as text
 //! on a terminal screen.
+//!
+//! The look was inspired by BS-Mail by IronWolve
+//! (<https://github.com/IronWolve/BS-Mail>), a fast, keyboard-first mail
+//! client that runs in the terminal. None of BS-Mail's code or files are
+//! used.
 
 use std::sync::OnceLock;
 
@@ -15,7 +20,11 @@ use crate::model::*;
 use crate::theme::{font, font_semibold, icon_font, pal};
 use crate::ui::mail::MailView;
 use crate::ui::settings::SettingsState;
+use crate::ui::widgets;
 use crate::util;
+
+/// The project whose look inspired the Terminal theme.
+pub const INSPIRED_BY_URL: &str = "https://github.com/IronWolve/BS-Mail";
 
 /// The marks at both ends of the title and status lines.
 pub const SLASHES: &str = "//////";
@@ -118,6 +127,25 @@ fn icon(ui: &mut Ui, ic: &str, color: egui::Color32) {
 }
 
 impl App {
+    /// Credit for the Terminal theme's look: a link to the project that
+    /// inspired it and a note that RustMail isn't affiliated with it, kept
+    /// together wherever the credit is shown (the About dialog and Settings
+    /// → About).
+    pub fn term_credit_link(&mut self, ui: &mut Ui) {
+        let p = pal();
+        let link = widgets::link(ui, "Terminal theme inspired by BS-Mail by IronWolve").on_hover_text(INSPIRED_BY_URL);
+        if link.clicked() {
+            if let Err(e) = open::that(INSPIRED_BY_URL) {
+                self.toast(format!("Couldn't open the browser: {e}"), ToastKind::Error);
+            }
+        }
+        ui.label(
+            RichText::new("RustMail uses none of BS-Mail's code or files, and is not affiliated with or endorsed by BS-Mail or IronWolve.")
+                .font(font(12.0))
+                .color(p.text3),
+        );
+    }
+
     /// Draws the Terminal theme's box lines: around the window and between
     /// the bars at its top and bottom.
     pub fn term_frame(&self, ui: &Ui, rules: &[f32]) {

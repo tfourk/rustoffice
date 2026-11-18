@@ -1206,6 +1206,8 @@ impl App {
                                 .font(font(12.0))
                                 .color(p.text3),
                         );
+                        ui.add_space(8.0);
+                        self.term_credit_link(ui);
                         ui.add_space(14.0);
                         if widgets::primary_button(ui, None, "Close").clicked() {
                             keep = false;

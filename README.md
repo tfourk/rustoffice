@@ -123,11 +123,14 @@ categorize, junk, sweep, send / receive, layout, density, theme, zoom, settings 
 **Show the full ribbon** in that menu switches back. Keyboard shortcuts work the same in
 both.
 
+![Slim toolbar with its menu open](docs/screenshots/slim.png)
+
 ### Terminal theme
 
 Settings → Appearance → **Terminal** (or View → Theme) makes RustMail look like a mail
 reader running in a terminal: monospace text, square boxes with cyan lines, green
-headings, yellow counts and a blue selection bar.
+headings, yellow counts and a blue selection bar. Its look was inspired by
+[BS-Mail](https://github.com/IronWolve/BS-Mail) by IronWolve (see [Credits](#credits)).
 
 ![Terminal theme](docs/screenshots/terminal.png)
 
@@ -145,8 +148,6 @@ headings, yellow counts and a blue selection bar.
 Choosing the Terminal theme moves the reading pane below the list, where the columns
 have room; View → Layout moves it back. The theme has its own colours, so the accent
 colour setting doesn't apply to it.
-
-![Slim toolbar with its menu open](docs/screenshots/slim.png)
 
 ### Neon Sunset and Cyberpunk themes
 
@@ -379,3 +380,10 @@ start-up and exit (useful for visual checks in CI).
 - Rich-text composing uses Markdown syntax with a preview rather than WYSIWYG editing.
 - PDFs follow the reading pane's single-column layout, save one message at a time (not a
   whole conversation), and don't reorder right-to-left text.
+
+## Credits
+
+The Terminal theme was inspired by [BS-Mail](https://github.com/IronWolve/BS-Mail) by
+IronWolve, a fast, keyboard-first mail client that runs in the terminal. RustMail uses
+none of BS-Mail's code or files, and it is not affiliated with or endorsed by BS-Mail
+or IronWolve.
