@@ -109,8 +109,8 @@ suggested contacts collected from mail you send; vCard import/export.
 **To Do** — My Day, Important, Planned, Flagged email (completing one clears the flag),
 custom lists, due dates, reminders and notes.
 
-**Look and feel** — light / dark / system theme, a **Terminal** theme (see below), eight
-accent colours, Compact / Cozy / Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
+**Look and feel** — light / dark / system theme, **Terminal**, **Neon Sunset** and
+**Cyberpunk** themes (see below), eight accent colours, Compact / Cozy / Roomy density, an optional **slim toolbar** (see below), zoom (Ctrl +/−), 12/24-hour time, modern title bar with search (or native
 window decorations), resizable panes that remember their size.
 
 ### Slim toolbar
@@ -148,6 +148,26 @@ headings, yellow counts and a blue selection bar. Its look was inspired by
 Choosing the Terminal theme moves the reading pane below the list, where the columns
 have room; View → Layout moves it back. The theme has its own colours, so the accent
 colour setting doesn't apply to it.
+
+### Neon Sunset and Cyberpunk themes
+
+Two more themes with colours of their own (Settings → Appearance, View → Theme, or
+`--theme sunset` / `--theme cyberpunk`):
+
+| | |
+|---|---|
+| ![Neon Sunset theme](docs/screenshots/neon-sunset.png) | ![Cyberpunk theme](docs/screenshots/cyberpunk.png) |
+
+- **Neon Sunset** is a synthwave dusk: calm indigo panes for reading, a striped retro sun
+  and a glowing pink-to-gold horizon in the title bar, buttons and tabs that fade from hot
+  pink into sunset orange, and teal links.
+- **Cyberpunk** is near-black with acid yellow, electric cyan and hot magenta: panels with
+  cut corners and a lit yellow bracket, a magenta outline on the selection, neon edges
+  instead of shadows, and a glitched wordmark.
+
+Every text colour in both meets the WCAG AA contrast guideline, so they stay readable
+through a day of mail. Like Terminal, they have their own colours, so the accent colour
+setting doesn't apply to them.
 
 ## Keyboard shortcuts
 
@@ -204,7 +224,7 @@ username = "jane@example.com"
 ```
 
 Command-line options: `--demo`, `--data-dir DIR`, `--module mail|calendar|people|todo`,
-`--theme light|dark|terminal`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
+`--theme light|dark|terminal|sunset|cyberpunk`, `--wizard`, `--add-account EMAIL`, `--settings [accounts]`,
 `--google-setup`, `--import-outlook FILE`, `--help`.
 
 ### Google accounts (Gmail, Google Workspace)

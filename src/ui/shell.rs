@@ -10,7 +10,7 @@ use crate::config::ReadingPanePos;
 use crate::engine::Command;
 use crate::icons;
 use crate::model::*;
-use crate::theme::{self, font, font_semibold, icon_fill_font, icon_font, mix, pal, Density, ThemeMode};
+use crate::theme::{self, font, font_semibold, icon_fill_font, icon_font, mix, pal, with_alpha, Density, Skin, ThemeMode};
 use crate::ui::settings::SettingsState;
 use crate::ui::widgets::{self, ribbon_button, ribbon_button_ex, ribbon_menu, ribbon_separator};
 use crate::util;
@@ -76,6 +76,10 @@ impl App {
         if p.term {
             self.term_frame(ui, &rules);
         }
+        if p.skin == Skin::NeonSunset {
+            // Painted last so the ribbon's background doesn't cover the glow.
+            sunset_horizon(ui.painter(), title.response.rect);
+        }
 
         self.compose_windows(&ctx);
         self.dialogs(&ctx);
@@ -126,6 +130,11 @@ impl App {
         let p = pal();
         let rect = ui.max_rect();
         let ctx = ui.ctx().clone();
+        if p.skin == Skin::NeonSunset {
+            // A night sky warming toward the horizon, most behind the search.
+            let sky = [theme::sunset::SKY_EDGE, theme::sunset::SKY_GLOW, theme::sunset::SKY_EDGE];
+            widgets::paint_gradient_rows(ui.painter(), rect, &[p.bg; 3], &sky);
+        }
         let custom = self.cfg.appearance.custom_titlebar;
         if custom {
             let drag = ui.interact(rect, Id::new("titlebar-drag"), Sense::click_and_drag());
@@ -145,10 +154,22 @@ impl App {
                 return;
             }
             let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
-            ui.painter().rect_filled(r, CornerRadius::same(6), p.accent);
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(17.0), Color32::WHITE);
+            if p.skin == Skin::NeonSunset {
+                widgets::paint_sun(ui.painter(), r.center(), 13.0, mix(p.bg, theme::sunset::SKY_EDGE, 0.65));
+            } else {
+                ui.painter().rect_filled(r, CornerRadius::same(6), p.accent);
+                ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(17.0), p.on_accent);
+            }
             ui.add_space(6.0);
-            ui.label(RichText::new("RustMail").font(font_semibold(15.0)).color(p.text));
+            match p.skin {
+                Skin::NeonSunset => {
+                    ui.label(RichText::new("RustMail").font(font_semibold(15.0)).color(p.accent_text));
+                }
+                Skin::Cyberpunk => glitch_wordmark(ui),
+                _ => {
+                    ui.label(RichText::new("RustMail").font(font_semibold(15.0)).color(p.text));
+                }
+            }
         });
 
         // Center: search. The Terminal theme's longer title moves it right.
@@ -327,7 +348,11 @@ impl App {
                 }
                 if selected {
                     let bar = Rect::from_center_size(Pos2::new(rect.left() + 3.0, rect.center().y), vec2(3.0, 20.0));
-                    ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+                    if p.skin == Skin::NeonSunset {
+                        widgets::paint_gradient(ui.painter(), bar, &[theme::sunset::ORANGE, theme::sunset::PINK], true);
+                    } else {
+                        ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+                    }
                 }
                 ui.painter().text(
                     inner.center(),
@@ -340,11 +365,11 @@ impl App {
             if module == Module::Mail && unread > 0 && !p.term {
                 let c = Pos2::new(inner.right() - 9.0, inner.top() + 10.0);
                 let txt = if unread > 99 { "99+".to_string() } else { unread.to_string() };
-                let g = ui.painter().layout_no_wrap(txt, font_semibold(10.0), Color32::WHITE);
+                let g = ui.painter().layout_no_wrap(txt, font_semibold(10.0), p.on_accent);
                 let w = (g.size().x + 8.0).max(16.0);
                 let br = Rect::from_center_size(c, vec2(w, 16.0));
-                ui.painter().rect_filled(br, CornerRadius::same(8), p.accent);
-                ui.painter().galley(br.center() - g.size() / 2.0, g, Color32::WHITE);
+                widgets::accent_fill(ui.painter(), br, 8, false, false);
+                ui.painter().galley(br.center() - g.size() / 2.0, g, p.on_accent);
             }
             let resp = resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip);
             if resp.clicked() {
@@ -962,7 +987,7 @@ impl App {
                                         if n == 1 { "item" } else { "items" }
                                     ))
                                     .font(icon_font(13.0))
-                                    .color(Color32::WHITE),
+                                    .color(p.on_accent),
                                 );
                             });
                     });
@@ -1164,8 +1189,12 @@ impl App {
                 Dialog::About => {
                     ui.vertical_centered(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
-                        ui.painter().rect_filled(r, CornerRadius::same(12), p.accent);
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(32.0), Color32::WHITE);
+                        if p.skin == Skin::NeonSunset {
+                            widgets::paint_sun(ui.painter(), r.center(), 26.0, p.card);
+                        } else {
+                            ui.painter().rect_filled(r, CornerRadius::same(12), p.accent);
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(32.0), p.on_accent);
+                        }
                         ui.add_space(8.0);
                         widgets::heading(ui, "RustMail", 20.0);
                         ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(p.text3));
@@ -1244,6 +1273,38 @@ pub struct SyncSummary {
     pub error: bool,
     /// When the most recent sync finished (0 if never).
     pub last: i64,
+}
+
+/// Neon Sunset's horizon under the title bar: a line fading from violet
+/// through pink and orange to gold in the middle and back, with a soft
+/// glow below it.
+fn sunset_horizon(painter: &egui::Painter, title: Rect) {
+    use theme::sunset::{GOLD, ORANGE, PINK, VIOLET};
+    let clear = Color32::TRANSPARENT;
+    let line = Rect::from_x_y_ranges(title.x_range(), (title.bottom() - 2.0)..=title.bottom());
+    widgets::paint_gradient(painter, line, &[clear, VIOLET, PINK, ORANGE, GOLD, ORANGE, PINK, VIOLET, clear], false);
+    // The end stops are fully transparent: fading a transparent colour
+    // further would leave a dark smudge.
+    let glow = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 40);
+    let top = [clear, glow(VIOLET), glow(PINK), glow(ORANGE), glow(GOLD), glow(ORANGE), glow(PINK), glow(VIOLET), clear];
+    let below = Rect::from_x_y_ranges(title.x_range(), title.bottom()..=(title.bottom() + 6.0));
+    widgets::paint_gradient_rows(painter, below, &top, &[clear; 9]);
+}
+
+/// Cyberpunk's wordmark: "RustMail" with a fixed magenta / cyan colour split
+/// and one thin slice shifted sideways in acid yellow, like a glitch.
+fn glitch_wordmark(ui: &mut Ui) {
+    let p = pal();
+    let g = ui.painter().layout_no_wrap("RustMail".into(), font_semibold(15.0), p.text);
+    let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+    let painter = ui.painter();
+    painter.galley_with_override_text_color(r.min - vec2(1.0, 0.0), g.clone(), with_alpha(p.magenta, 0xB0));
+    painter.galley_with_override_text_color(r.min + vec2(1.0, 0.0), g.clone(), with_alpha(p.cyan, 0xB0));
+    painter.galley(r.min, g.clone(), p.text);
+    let slice = Rect::from_min_size(r.min + vec2(-2.0, (r.height() * 0.58).round()), vec2(r.width() + 6.0, 2.0));
+    let sliced = painter.with_clip_rect(slice);
+    sliced.rect_filled(slice, CornerRadius::ZERO, p.bg);
+    sliced.galley_with_override_text_color(r.min + vec2(3.0, 0.0), g, p.accent);
 }
 
 pub const SHORTCUTS: &[(&str, &str)] = &[

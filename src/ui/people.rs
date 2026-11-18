@@ -518,7 +518,13 @@ fn detail_row(ui: &mut Ui, icon: &str, label: &str, value: &str, clickable: bool
         Align2::LEFT_CENTER,
         value,
         font(14.0),
-        if clickable { p.accent_text } else { p.text },
+        if !clickable {
+            p.text
+        } else if p.skin == crate::theme::Skin::NeonSunset {
+            p.cyan
+        } else {
+            p.accent_text
+        },
     );
     let resp = if clickable { resp.on_hover_cursor(CursorIcon::PointingHand) } else { resp.on_hover_text("Click to copy") };
     resp.clicked()

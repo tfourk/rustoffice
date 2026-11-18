@@ -1,6 +1,6 @@
 //! "Add account" wizard: e-mail first, settings discovered automatically.
 
-use egui::{vec2, Align, Align2, Color32, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, RichText, Sense, Ui};
+use egui::{vec2, Align, Align2, CornerRadius, Frame, Id, Key, Layout, Margin, Modal, RichText, Sense, Ui};
 
 use crate::app::{App, ToastKind};
 use crate::config::{AccountConfig, AuthKind, OAuthClientKey, OAuthConfig, Security, ServerConfig};
@@ -225,7 +225,7 @@ impl App {
                     ui.vertical_centered(|ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(88.0, 88.0), Sense::hover());
                         ui.painter().rect_filled(r, CornerRadius::same(20), p.accent);
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(48.0), Color32::WHITE);
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, icons::ENVELOPE_SIMPLE, icon_fill_font(48.0), p.on_accent);
                         ui.add_space(18.0);
                         ui.label(RichText::new("Welcome to RustMail").font(font_semibold(26.0)));
                         ui.add_space(6.0);

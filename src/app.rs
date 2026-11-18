@@ -136,8 +136,8 @@ pub struct App {
     pub search: String,
     pub focus_search: bool,
     pub cfg_dirty_at: Option<f64>,
-    /// (dark, terminal, accent, density) last handed to `theme::apply`.
-    pub applied_theme: Option<(bool, bool, theme::Accent, theme::Density)>,
+    /// (dark, skin, accent, density) last handed to `theme::apply`.
+    pub applied_theme: Option<(bool, theme::Skin, theme::Accent, theme::Density)>,
     /// Whether the installed fonts are the Terminal theme's monospace ones.
     fonts_terminal: bool,
     pub applied_zoom: f32,
@@ -617,15 +617,16 @@ impl App {
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
         let mode = self.start.theme.unwrap_or(self.cfg.appearance.theme);
-        let terminal = mode == ThemeMode::Terminal;
+        let skin = mode.skin();
+        let terminal = skin == theme::Skin::Terminal;
         let dark = match mode {
             ThemeMode::Light => false,
-            ThemeMode::Dark | ThemeMode::Terminal => true,
+            ThemeMode::Dark | ThemeMode::Terminal | ThemeMode::NeonSunset | ThemeMode::Cyberpunk => true,
             ThemeMode::System => ctx.system_theme().map(|t| t == egui::Theme::Dark).unwrap_or(false),
         };
-        let key = (dark, terminal, self.cfg.appearance.accent, self.cfg.appearance.density);
+        let key = (dark, skin, self.cfg.appearance.accent, self.cfg.appearance.density);
         if self.applied_theme != Some(key) {
-            theme::apply(ctx, dark, terminal, self.cfg.appearance.accent, self.cfg.appearance.density);
+            theme::apply(ctx, dark, skin, self.cfg.appearance.accent, self.cfg.appearance.density);
             self.applied_theme = Some(key);
             self.dark = dark;
         }
@@ -816,9 +817,8 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
         self.draw(ui);
         self.drag_out(&ctx);
-        if theme::terminal() {
-            theme::square_corners(&ctx);
-        }
+        // Themes that reshape every box do it once the frame is drawn.
+        theme::restyle_frame(&ctx);
         self.screenshot_hook(&ctx);
     }
 

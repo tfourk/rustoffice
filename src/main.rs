@@ -31,7 +31,8 @@ OPTIONS:
     --demo                 Add the offline demo mailbox on first start
     --data-dir <DIR>       Keep settings and mail in DIR (default: platform folders)
     --module <NAME>        Start in mail, calendar, people or todo
-    --theme <NAME>         Override the theme for this run: light, dark or terminal
+    --theme <NAME>         Override the theme for this run: light, dark, terminal,
+                           sunset (Neon Sunset) or cyberpunk
     --open-first           Open the first message of the inbox
     --compose              Open a sample message in the composer
     --settings [accounts]  Open the settings dialog (optionally at Accounts)
@@ -87,6 +88,8 @@ fn main() -> eframe::Result<()> {
                     Some("dark") => Some(theme::ThemeMode::Dark),
                     Some("light") => Some(theme::ThemeMode::Light),
                     Some("terminal") => Some(theme::ThemeMode::Terminal),
+                    Some("sunset") | Some("neon-sunset") => Some(theme::ThemeMode::NeonSunset),
+                    Some("cyberpunk") => Some(theme::ThemeMode::Cyberpunk),
                     _ => None,
                 };
             }

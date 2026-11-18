@@ -1308,7 +1308,16 @@ impl App {
         ui.painter().rect_filled(inner, CornerRadius::same(6), bg);
         if unread {
             let bar = Rect::from_min_size(inner.left_top() + vec2(0.0, 6.0), vec2(3.0, inner.height() - 12.0));
-            ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+            if p.skin == theme::Skin::NeonSunset {
+                // A tiny sunset: orange at the top, pink at the bottom.
+                widgets::paint_gradient(ui.painter(), bar, &[theme::sunset::ORANGE, theme::sunset::PINK], true);
+            } else {
+                ui.painter().rect_filled(bar, CornerRadius::same(2), p.accent);
+            }
+        }
+        if selected && p.skin == theme::Skin::NeonSunset {
+            // A thin neon rim around the selected message.
+            ui.painter().rect_stroke(inner, CornerRadius::same(6), Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xFF, 0x94, 0xC8, 80)), egui::StrokeKind::Inside);
         }
         let pad = density().pad();
         let mut x = inner.left() + 12.0 + if child { 22.0 } else { 0.0 };
@@ -2595,7 +2604,7 @@ impl App {
                     ui.painter().rect_filled(r, CornerRadius::same(6), p.card);
                     let band = Rect::from_min_size(r.min, vec2(r.width(), 16.0));
                     ui.painter().rect_filled(band, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, p.accent);
-                    ui.painter().text(band.center(), Align2::CENTER_CENTER, start.format("%b").to_string().to_uppercase(), font_semibold(10.0), Color32::WHITE);
+                    ui.painter().text(band.center(), Align2::CENTER_CENTER, start.format("%b").to_string().to_uppercase(), font_semibold(10.0), p.on_accent);
                     ui.painter().text(Pos2::new(r.center().x, r.top() + 34.0), Align2::CENTER_CENTER, start.format("%-d").to_string(), font_semibold(20.0), p.text);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
