@@ -88,6 +88,19 @@ fn find_face_styled(db: &fontdb::Database, family: &str, weight: u16, exact: boo
     })
 }
 
+/// The app's icons sit in the Private Use Area, where some text fonts
+/// (Inter, for one) have glyphs of their own. Fonts are tried in order, so
+/// such a family would show its own glyphs in place of the icons.
+fn hides_icons(face: &Face) -> bool {
+    let Ok(parsed) = rustybuzz::ttf_parser::Face::parse(&face.data, face.index) else {
+        return false;
+    };
+    [crate::icons::ENVELOPE_SIMPLE, crate::icons::ARCHIVE, crate::icons::GEAR_SIX, crate::icons::TRASH]
+        .iter()
+        .filter_map(|icon| icon.chars().next())
+        .any(|c| parsed.glyph_index(c).is_some())
+}
+
 fn insert(fonts: &mut FontDefinitions, key: &str, face: Face) {
     let mut fd = FontData::from_owned(face.data);
     fd.index = face.index;
@@ -105,6 +118,10 @@ pub fn install(ctx: &egui::Context, terminal: bool) -> String {
     let mut ui_regular = None;
     for fam in if terminal { MONO_FAMILIES } else { UI_FAMILIES } {
         if let Some(reg) = find_face(&db, fam, 400, true) {
+            if hides_icons(&reg) {
+                log::info!("not using {fam} for the interface: it has glyphs where the icons are");
+                continue;
+            }
             let semi = find_face(&db, fam, 600, true).or_else(|| find_face(&db, fam, 700, true));
             let bold = find_face(&db, fam, 700, true);
             used = fam.to_string();
