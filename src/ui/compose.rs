@@ -806,6 +806,9 @@ impl App {
                         .show(ui, |ui| {
                             outcome = self.compose_form(ui, &mut c);
                         });
+                    // This window is painted before the main window's frame
+                    // ends, so it gets the theme's box shapes here.
+                    crate::theme::restyle_frame(ui.ctx());
                     if ui.input(|i| i.viewport().close_requested()) {
                         outcome = Outcome::Close;
                     }

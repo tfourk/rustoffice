@@ -70,27 +70,41 @@ pub fn paint_gradient_rows(painter: &egui::Painter, rect: Rect, top: &[Color32],
 /// Neon Sunset's striped retro sun: a disc fading from gold through
 /// orange to pink, crossed by three bands of `band` colour.
 pub fn paint_sun(painter: &egui::Painter, c: Pos2, radius: f32, band: Color32) {
-    use theme::sunset;
-    // A plain disc underneath gives the gradient an anti-aliased edge.
-    painter.circle_filled(c, radius, sunset::ORANGE);
-    let r = radius - 0.5;
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(c, sunset::ORANGE);
-    const RIM: u32 = 24;
-    for i in 0..RIM {
-        let a = i as f32 / RIM as f32 * std::f32::consts::TAU;
-        let pos = c + vec2(a.cos(), a.sin()) * r;
-        mesh.colored_vertex(pos, sunset::sun_at((pos.y - (c.y - r)) / (2.0 * r)));
-    }
-    for i in 1..=RIM {
-        mesh.add_triangle(0, i, i % RIM + 1);
-    }
-    painter.add(mesh);
-    for (at, height) in [(0.23, 1.0), (0.5, 1.5), (0.77, 2.0)] {
-        let y = c.y + at * radius;
-        let band_rect = Rect::from_min_max(Pos2::new(c.x - radius - 1.0, y - height / 2.0), Pos2::new(c.x + radius + 1.0, y + height / 2.0));
+    paint_sun_disc(painter, c, radius);
+    // Bands on whole pixels, so they stay crisp, each as wide as the disc
+    // where it crosses it.
+    for (at, height) in [(0.23, 1.0), (0.5, 2.0), (0.77, 2.0)] {
+        let top = (c.y + at * radius - height / 2.0).round();
+        let dy = top + height / 2.0 - c.y;
+        let half = (radius * radius - dy * dy).max(0.0).sqrt() + 0.5;
+        let band_rect = Rect::from_min_max(Pos2::new(c.x - half, top), Pos2::new(c.x + half, top + height));
         painter.rect_filled(band_rect, CornerRadius::ZERO, band);
     }
+}
+
+/// The sun's disc without bands: a mesh coloured gold to pink from top to
+/// bottom, with a thin transparent rim of its own colour for a smooth edge
+/// (a mesh, so theme passes that reshape circles leave it alone).
+pub fn paint_sun_disc(painter: &egui::Painter, c: Pos2, radius: f32) {
+    use theme::sunset;
+    const RIM: u32 = 36;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(c, sunset::sun_at(0.5));
+    for i in 0..RIM {
+        let a = i as f32 / RIM as f32 * std::f32::consts::TAU;
+        let dir = vec2(a.cos(), a.sin());
+        let inner = c + dir * (radius - 0.5);
+        let color = sunset::sun_at((inner.y - (c.y - radius)) / (2.0 * radius));
+        mesh.colored_vertex(inner, color);
+        mesh.colored_vertex(c + dir * (radius + 0.5), Color32::TRANSPARENT);
+    }
+    for i in 0..RIM {
+        let (a, b) = (1 + 2 * i, 1 + 2 * ((i + 1) % RIM));
+        mesh.add_triangle(0, a, b);
+        mesh.add_triangle(a, a + 1, b);
+        mesh.add_triangle(a + 1, b + 1, b);
+    }
+    painter.add(mesh);
 }
 
 /// Fills an accent-coloured mark (a primary button, a selected tab's
@@ -779,8 +793,10 @@ pub fn text_input_ex(ui: &mut Ui, text: &mut String, hint: &str, width: f32, pas
     );
     if resp.has_focus() {
         let r = resp.rect;
+        // Cyberpunk cuts the box's bottom-right corner: stop short of it.
+        let cut = theme::corner_cut(ui.visuals().widgets.inactive.corner_radius.se, r);
         ui.painter().hline(
-            r.x_range().shrink(1.0),
+            (r.left() + 1.0)..=(r.right() - 1.0 - cut),
             r.bottom() - 1.0,
             Stroke::new(2.0, if p.skin == theme::Skin::NeonSunset { p.cyan } else { p.accent }),
         );

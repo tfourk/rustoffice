@@ -818,11 +818,7 @@ impl eframe::App for App {
         self.draw(ui);
         self.drag_out(&ctx);
         // Themes that reshape every box do it once the frame is drawn.
-        match theme::pal().skin {
-            theme::Skin::Terminal => theme::square_corners(&ctx),
-            theme::Skin::Cyberpunk => theme::cut_corners(&ctx),
-            theme::Skin::Standard | theme::Skin::NeonSunset => {}
-        }
+        theme::restyle_frame(&ctx);
         self.screenshot_hook(&ctx);
     }
 

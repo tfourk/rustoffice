@@ -157,13 +157,13 @@ impl Default for CalState {
 }
 
 /// Fill and text colour of an all-day event chip in the event's colour,
-/// dimmed toward the card by `dim` unless hovered. Themes with their own
-/// colours dim the hovered chip a little too and pick the text colour that
-/// reads best on it, since their accent (the colour of events without a
-/// category) can be too bright for white text.
+/// dimmed toward the card by `dim` unless hovered. Neon Sunset and
+/// Cyberpunk dim the hovered chip a little too and pick the text colour
+/// that reads best on it, since their accent (the colour of events without
+/// a category) is too bright for white text.
 fn chip_colors(color: Color32, hovered: bool, dim: f32) -> (Color32, Color32) {
     let p = pal();
-    if p.skin == theme::Skin::Standard {
+    if !matches!(p.skin, theme::Skin::NeonSunset | theme::Skin::Cyberpunk) {
         return (if hovered { color } else { mix(color, p.card, dim) }, Color32::WHITE);
     }
     let fill = mix(color, p.card, if hovered { 0.3 } else { dim });
@@ -817,13 +817,17 @@ impl App {
                         } else {
                             mix(color, p.card, if p.dark { 0.62 } else { 0.8 })
                         };
-                        ui.painter().rect_filled(r, CornerRadius::same(4), if resp.hovered() { mix(fill, color, 0.15) } else { fill });
+                        let fill = if resp.hovered() { mix(fill, color, 0.15) } else { fill };
+                        ui.painter().rect_filled(r, CornerRadius::same(4), fill);
                         let bar = Rect::from_min_size(r.left_top(), vec2(4.0, r.height()));
                         ui.painter().rect_filled(bar, CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color);
                         if o.event.show_as == ShowAs::Tentative {
                             ui.painter().rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, color), egui::StrokeKind::Inside);
                         }
-                        let text_c = if p.dark { Color32::WHITE } else { p.text };
+                        // Neon Sunset and Cyberpunk pick the text colour by the
+                        // fill: their accent can make it bright.
+                        let own_ink = matches!(p.skin, theme::Skin::NeonSunset | theme::Skin::Cyberpunk).then(|| theme::ink_on(fill));
+                        let text_c = own_ink.unwrap_or(if p.dark { Color32::WHITE } else { p.text });
                         let clip = ui.painter().with_clip_rect(r.shrink(2.0));
                         let compact = r.height() < 30.0;
                         let label = if compact {
@@ -843,10 +847,10 @@ impl App {
                             if !o.event.location.is_empty() {
                                 sub = format!("{sub} · {}", o.event.location);
                             }
-                            clip.text(r.left_top() + vec2(9.0, 5.0 + th), Align2::LEFT_TOP, sub, font(11.5), if p.dark { Color32::from_gray(220) } else { p.text2 });
+                            clip.text(r.left_top() + vec2(9.0, 5.0 + th), Align2::LEFT_TOP, sub, font(11.5), own_ink.unwrap_or(if p.dark { Color32::from_gray(220) } else { p.text2 }));
                         }
                         if o.event.repeat != RepeatFreq::None && r.height() > 30.0 {
-                            clip.text(r.right_top() + vec2(-6.0, 4.0), Align2::RIGHT_TOP, icons::REPEAT, icon_font(11.0), p.text3);
+                            clip.text(r.right_top() + vec2(-6.0, 4.0), Align2::RIGHT_TOP, icons::REPEAT, icon_font(11.0), own_ink.unwrap_or(p.text3));
                         }
                         if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                             open = Some(((*o).clone(), r.right_top()));
@@ -1269,8 +1273,13 @@ fn calendar_toggle(ui: &mut Ui, on: &mut bool, label: &str, color: Color32) {
     let b = Rect::from_center_size(Pos2::new(rect.left() + 16.0, rect.center().y), vec2(16.0, 16.0));
     if *on {
         ui.painter().rect_filled(b, CornerRadius::same(3), color);
-        let ink = if color == p.accent { p.on_accent } else { Color32::WHITE };
-        ui.painter().text(b.center(), Align2::CENTER_CENTER, icons::CHECK, icon_fill_font(12.0), ink);
+        if color == p.accent && p.on_accent != Color32::WHITE {
+            // The filled check is a white square with the tick cut out; on
+            // themes with dark ink on the accent, draw just the tick.
+            ui.painter().text(b.center(), Align2::CENTER_CENTER, icons::CHECK, icon_font(12.0), p.on_accent);
+        } else {
+            ui.painter().text(b.center(), Align2::CENTER_CENTER, icons::CHECK, icon_fill_font(12.0), Color32::WHITE);
+        }
     } else {
         ui.painter().rect_stroke(b, CornerRadius::same(3), Stroke::new(1.5, color), egui::StrokeKind::Inside);
     }

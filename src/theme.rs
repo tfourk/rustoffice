@@ -478,7 +478,8 @@ pub mod sunset {
 /// Text colour for a label drawn on `fill`: white, or dark ink where white
 /// would be hard to read (light or bright fills).
 pub fn ink_on(fill: Color32) -> Color32 {
-    let ink = hex(0x14101C);
+    // Near-black, so the better of the two is at least 4.5:1 on any fill.
+    let ink = hex(0x08060C);
     if contrast(Color32::WHITE, fill) >= contrast(ink, fill) {
         Color32::WHITE
     } else {
@@ -754,35 +755,49 @@ fn terminal_visuals(v: &mut Visuals, p: &Palette) {
     w.open.bg_stroke = Stroke::new(1.0, p.stroke_strong);
 }
 
-/// Runs `f` on every shape painted so far this frame, in every layer.
-/// Themes use it once the frame is drawn to restyle shapes across the
-/// whole app without changing the code that paints them.
-fn restyle_shapes(ctx: &egui::Context, f: &dyn Fn(&mut egui::Shape)) {
-    fn visit(shape: &mut egui::Shape, f: &dyn Fn(&mut egui::Shape)) {
+/// Runs `f` on every shape painted so far this frame, in every layer of the
+/// current viewport, with the index of the layer it is in (layers are
+/// visited one after another). Themes use it once the frame is drawn to
+/// restyle shapes across the whole app without changing the code that
+/// paints them.
+fn restyle_shapes(ctx: &egui::Context, f: &dyn Fn(&mut egui::Shape, usize)) {
+    fn visit(shape: &mut egui::Shape, layer: usize, f: &dyn Fn(&mut egui::Shape, usize)) {
         if let egui::Shape::Vec(list) = shape {
-            list.iter_mut().for_each(|s| visit(s, f));
+            list.iter_mut().for_each(|s| visit(s, layer, f));
         } else {
-            f(shape);
+            f(shape, layer);
         }
     }
     let mut layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().collect());
     layers.push(egui::LayerId::background());
     ctx.graphics_mut(|g| {
-        for id in layers {
+        for (n, id) in layers.into_iter().enumerate() {
             if let Some(list) = g.get_mut(id) {
                 for i in 0..list.next_idx().0 {
-                    list.mutate_shape(egui::layers::ShapeIdx(i), |s| visit(&mut s.shape, f));
+                    list.mutate_shape(egui::layers::ShapeIdx(i), |s| visit(&mut s.shape, n, f));
                 }
             }
         }
     });
 }
 
+/// Applies the theme's reshaping of boxes (square or cut corners) to
+/// everything painted this frame in the current viewport. Call it once per
+/// frame in every viewport, after all its drawing: the main window and
+/// pop-out compose windows.
+pub fn restyle_frame(ctx: &egui::Context) {
+    match pal().skin {
+        Skin::Terminal => square_corners(ctx),
+        Skin::Cyberpunk => cut_corners(ctx),
+        Skin::Standard | Skin::NeonSunset => {}
+    }
+}
+
 /// Makes every rectangle painted this frame square. The Terminal theme
 /// calls it once the frame is drawn, so the many rounded cards, buttons
 /// and highlights across the app need no changes of their own.
 pub fn square_corners(ctx: &egui::Context) {
-    restyle_shapes(ctx, &|shape| {
+    restyle_shapes(ctx, &|shape, _| {
         if let egui::Shape::Rect(r) = shape {
             r.corner_radius = CornerRadius::ZERO;
         }
@@ -790,19 +805,26 @@ pub fn square_corners(ctx: &egui::Context) {
 }
 
 /// The Cyberpunk theme's shapes, applied to everything painted this frame:
-/// - every rounded rectangle becomes a panel with its top-left and
-///   bottom-right corners cut off; large framed panels get an acid-yellow
-///   bracket lit along the cut top-left corner and a cyan tick on the other;
+/// - a rounded top-left or bottom-right corner is cut off diagonally (the
+///   other two corners, and corners that were square, become square);
+/// - the outermost large framed panels get an acid-yellow bracket lit along
+///   their cut top-left corner and a cyan tick on the other;
 /// - anything filled with the selection colour gets a magenta outline;
 /// - circles of radius 5 or more (avatars, round buttons) become cut tiles.
 ///
-/// Square rectangles (backgrounds, lines), images, shadows and rotated
-/// rectangles stay as they are, and small dots stay round.
+/// Square rectangles (backgrounds, lines), images, shadows, rotated
+/// rectangles and meshes (gradients) stay as they are, and small dots stay
+/// round.
 pub fn cut_corners(ctx: &egui::Context) {
     let p = pal();
+    let ppp = ctx.pixels_per_point();
     let selection_line = Stroke::new(1.0, mix(p.selected, p.magenta, 0.6));
     let is_selection = |c: Color32| c == p.selected || c == p.selected_hover;
-    restyle_shapes(ctx, &|shape| {
+    // Panels given a bracket so far, in the layer being visited: panels
+    // inside them (cards in a dialog, a message in the reading pane) don't
+    // get one of their own.
+    let bracketed: std::cell::RefCell<(usize, Vec<egui::Rect>)> = Default::default();
+    restyle_shapes(ctx, &|shape, layer| {
         if let egui::Shape::Circle(c) = shape {
             if c.radius >= 5.0 {
                 // A tile 1.8 r wide, inside the circle's box.
@@ -822,8 +844,7 @@ pub fn cut_corners(ctx: &egui::Context) {
             return;
         }
         let egui::Shape::Rect(r) = shape else { return };
-        let radius = r.corner_radius.nw.max(r.corner_radius.se) as f32;
-        if radius == 0.0 || r.blur_width > 0.0 || r.brush.is_some() || r.angle != 0.0 {
+        if r.corner_radius == CornerRadius::ZERO || r.blur_width > 0.0 || r.brush.is_some() || r.angle != 0.0 {
             return;
         }
         // Framed before the selection outline is added, so selected rows
@@ -833,51 +854,95 @@ pub fn cut_corners(ctx: &egui::Context) {
             r.stroke = selection_line;
             r.stroke_kind = egui::StrokeKind::Inside;
         }
-        // Where the stroke sits, as egui would draw it.
+        // On whole pixels, as egui draws rectangles, so 1 px borders stay
+        // crisp at any zoom; then where the stroke sits.
+        let snapped = if r.round_to_pixels == Some(false) { r.rect } else { egui::emath::GuiRounding::round_to_pixels(r.rect, ppp) };
         let rect = match r.stroke_kind {
-            egui::StrokeKind::Inside => r.rect.shrink(r.stroke.width / 2.0),
-            egui::StrokeKind::Outside => r.rect.expand(r.stroke.width / 2.0),
-            egui::StrokeKind::Middle => r.rect,
+            egui::StrokeKind::Inside => snapped.shrink(r.stroke.width / 2.0),
+            egui::StrokeKind::Outside => snapped.expand(r.stroke.width / 2.0),
+            egui::StrokeKind::Middle => snapped,
         };
-        let cut = (radius * 1.25).min(rect.width() / 3.0).min(rect.height() / 3.0);
-        if cut < 2.0 {
+        // Each cut follows its own corner's radius. Narrow bars (an event's
+        // colour stripe) are cut across nearly their whole width, so they
+        // line up with the cut of the box they sit on.
+        let cut_for = |radius: u8| {
+            let cut = (radius as f32 * 1.25).min(rect.width() * 0.9).min(rect.height() / 3.0);
+            if cut >= 2.0 { cut } else { 0.0 }
+        };
+        let (nw, se) = (cut_for(r.corner_radius.nw), cut_for(r.corner_radius.se));
+        if nw == 0.0 && se == 0.0 {
             r.corner_radius = CornerRadius::ZERO;
             return;
         }
-        let points = vec![
-            egui::pos2(rect.left() + cut, rect.top()),
-            egui::pos2(rect.right(), rect.top()),
-            egui::pos2(rect.right(), rect.bottom() - cut),
-            egui::pos2(rect.right() - cut, rect.bottom()),
-            egui::pos2(rect.left(), rect.bottom()),
-            egui::pos2(rect.left(), rect.top() + cut),
-        ];
+        let mut points = Vec::with_capacity(6);
+        if nw > 0.0 {
+            points.push(egui::pos2(rect.left() + nw, rect.top()));
+        } else {
+            points.push(rect.left_top());
+        }
+        points.push(rect.right_top());
+        if se > 0.0 {
+            points.push(egui::pos2(rect.right(), rect.bottom() - se));
+            points.push(egui::pos2(rect.right() - se, rect.bottom()));
+        } else {
+            points.push(rect.right_bottom());
+        }
+        points.push(rect.left_bottom());
+        if nw > 0.0 {
+            points.push(egui::pos2(rect.left(), rect.top() + nw));
+        }
         let panel = egui::Shape::Path(egui::epaint::PathShape::convex_polygon(points, r.fill, r.stroke));
-        if framed && rect.width() >= 120.0 && rect.height() >= 40.0 {
-            let t = rect.shrink(0.5);
-            let bracket = egui::Shape::line(
+        let lit = framed && nw > 0.0 && rect.width() >= 120.0 && rect.height() >= 40.0 && {
+            let mut b = bracketed.borrow_mut();
+            if b.0 != layer {
+                *b = (layer, Vec::new());
+            }
+            let nested = b.1.iter().any(|outer| outer.expand(1.0).contains_rect(rect));
+            if !nested {
+                b.1.push(rect);
+            }
+            !nested
+        };
+        if !lit {
+            *shape = panel;
+            return;
+        }
+        let t = rect.shrink(0.5);
+        let mut parts = vec![
+            panel,
+            egui::Shape::line(
                 vec![
-                    egui::pos2(t.left(), t.top() + cut + 12.0),
-                    egui::pos2(t.left(), t.top() + cut),
-                    egui::pos2(t.left() + cut, t.top()),
-                    egui::pos2(t.left() + cut + 32.0, t.top()),
+                    egui::pos2(t.left(), t.top() + nw + 12.0),
+                    egui::pos2(t.left(), t.top() + nw),
+                    egui::pos2(t.left() + nw, t.top()),
+                    egui::pos2(t.left() + nw + 32.0, t.top()),
                 ],
                 Stroke::new(2.0, p.accent),
-            );
-            let tick = egui::Shape::line(
+            ),
+        ];
+        if se > 0.0 {
+            parts.push(egui::Shape::line(
                 vec![
-                    egui::pos2(t.right(), t.bottom() - cut - 8.0),
-                    egui::pos2(t.right(), t.bottom() - cut),
-                    egui::pos2(t.right() - cut, t.bottom()),
-                    egui::pos2(t.right() - cut - 8.0, t.bottom()),
+                    egui::pos2(t.right(), t.bottom() - se - 8.0),
+                    egui::pos2(t.right(), t.bottom() - se),
+                    egui::pos2(t.right() - se, t.bottom()),
+                    egui::pos2(t.right() - se - 8.0, t.bottom()),
                 ],
                 Stroke::new(1.0, p.cyan),
-            );
-            *shape = egui::Shape::Vec(vec![panel, bracket, tick]);
-        } else {
-            *shape = panel;
+            ));
         }
+        *shape = egui::Shape::Vec(parts);
     });
+}
+
+/// How far Cyberpunk cuts a corner of `radius` on a box of `rect`'s size
+/// (0 when it doesn't), for things drawn along a box's edge.
+pub fn corner_cut(radius: u8, rect: egui::Rect) -> f32 {
+    if pal().skin != Skin::Cyberpunk {
+        return 0.0;
+    }
+    let cut = (radius as f32 * 1.25).min(rect.width() * 0.9).min(rect.height() / 3.0);
+    if cut >= 2.0 { cut } else { 0.0 }
 }
 
 /// Border of dialogs: none, or a box line in the Terminal theme, where
