@@ -912,7 +912,7 @@ impl App {
     fn settings_appearance(&mut self, ui: &mut Ui) {
         let p = pal();
         group(ui, "Theme", |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for t in ThemeMode::ALL {
                     let sel = self.cfg.appearance.theme == t;
                     let (rect, r) = ui.allocate_exact_size(vec2(150.0, 110.0), Sense::click());
@@ -924,10 +924,18 @@ impl App {
                         ThemeMode::Dark => (theme::hex(0x1A1A1A), theme::hex(0x292929)),
                         ThemeMode::System => (theme::hex(0x8A8A8A), theme::hex(0xD0D0D0)),
                         ThemeMode::Terminal => (theme::Palette::terminal().bg, theme::Palette::terminal().bg),
+                        ThemeMode::NeonSunset => (theme::Palette::neon_sunset().bg, theme::Palette::neon_sunset().card),
+                        ThemeMode::Cyberpunk => (theme::Palette::cyberpunk().bg, theme::Palette::cyberpunk().card),
                     };
                     ui.painter().rect_filled(preview, CornerRadius::same(4), bg);
-                    if t == ThemeMode::Terminal {
-                        terminal_preview(ui.painter(), preview);
+                    let own_preview: Option<fn(&egui::Painter, egui::Rect)> = match t {
+                        ThemeMode::Terminal => Some(terminal_preview),
+                        ThemeMode::NeonSunset => Some(sunset_preview),
+                        ThemeMode::Cyberpunk => Some(cyber_preview),
+                        _ => None,
+                    };
+                    if let Some(draw_preview) = own_preview {
+                        draw_preview(ui.painter(), preview);
                         ui.painter().text(Pos2::new(rect.center().x, rect.bottom() - 18.0), Align2::CENTER_CENTER, t.label(), if sel { font_semibold(13.0) } else { font(13.0) }, p.text);
                         if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                             self.cfg.appearance.theme = t;
@@ -951,8 +959,9 @@ impl App {
             });
         });
         group(ui, "Accent color", |ui| {
-            if self.cfg.appearance.theme == ThemeMode::Terminal {
-                ui.label(RichText::new("The Terminal theme has its own colors; the accent color applies to the other themes.").font(font(12.5)).color(p.text3));
+            let mode = self.cfg.appearance.theme;
+            if mode.own_colors() {
+                ui.label(RichText::new(format!("The {} theme has its own colors; the accent color applies to Light and Dark.", mode.label())).font(font(12.5)).color(p.text3));
             }
             ui.horizontal_wrapped(|ui| {
                 for a in Accent::ALL {
@@ -1468,5 +1477,56 @@ fn terminal_preview(painter: &egui::Painter, area: egui::Rect) {
         bar(x, y, 3.0, if k % 2 == 0 { t.success } else { t.text3 });
         bar(x + 6.0, y, w * 0.3, t.text2);
         bar(x + 9.0 + w * 0.3, y, w * 0.45, t.text3);
+    }
+}
+
+/// A tiny picture of the Neon Sunset theme: a dusk sky fading into a
+/// striped sun over a teal horizon, with a pink selection bar.
+fn sunset_preview(painter: &egui::Painter, area: egui::Rect) {
+    let t = theme::Palette::neon_sunset();
+    widgets::paint_gradient(painter, area, &[t.bg, theme::mix(t.bg, t.magenta, 0.55), t.yellow], true);
+    // The sun: a half disc cut by dusk-coloured stripes.
+    let horizon = area.bottom() - 16.0;
+    let sun = egui::Pos2::new(area.center().x + 18.0, horizon);
+    painter.circle_filled(sun, 16.0, theme::mix(t.yellow, t.magenta, 0.35));
+    for k in 0..3 {
+        let y = horizon - 3.0 - k as f32 * 5.0;
+        painter.hline((sun.x - 17.0)..=(sun.x + 17.0), y, Stroke::new(1.5, theme::mix(t.bg, t.magenta, 0.55)));
+    }
+    painter.rect_filled(egui::Rect::from_min_max(egui::Pos2::new(area.left(), horizon), area.right_bottom()), CornerRadius::ZERO, t.bg);
+    painter.hline(area.x_range(), horizon, Stroke::new(1.5, t.cyan));
+    // A list with one selected row.
+    let list = egui::Rect::from_min_size(area.left_top() + vec2(8.0, 8.0), vec2(44.0, 30.0));
+    painter.rect_filled(list, CornerRadius::same(3), t.card);
+    painter.rect_filled(egui::Rect::from_min_size(list.left_top() + vec2(3.0, 4.0), vec2(38.0, 6.0)), CornerRadius::same(2), t.selected);
+    for k in 0..2 {
+        painter.rect_filled(egui::Rect::from_min_size(list.left_top() + vec2(5.0, 15.0 + k as f32 * 7.0), vec2(30.0, 3.0)), CornerRadius::ZERO, t.text3);
+    }
+}
+
+/// A tiny picture of the Cyberpunk theme: cut-corner panels with glowing
+/// cyan edges and an acid-yellow bar on a near-black screen.
+fn cyber_preview(painter: &egui::Painter, area: egui::Rect) {
+    let t = theme::Palette::cyberpunk();
+    let panel = |r: egui::Rect, cut: f32, fill: Color32, line: Color32| {
+        let points = vec![
+            egui::Pos2::new(r.left() + cut, r.top()),
+            r.right_top(),
+            egui::Pos2::new(r.right(), r.bottom() - cut),
+            egui::Pos2::new(r.right() - cut, r.bottom()),
+            r.left_bottom(),
+            egui::Pos2::new(r.left(), r.top() + cut),
+        ];
+        painter.add(egui::epaint::PathShape::convex_polygon(points, fill, Stroke::new(1.0, line)));
+    };
+    let left = egui::Rect::from_min_size(area.left_top() + vec2(6.0, 8.0), vec2(36.0, 46.0));
+    let right = egui::Rect::from_min_size(area.left_top() + vec2(48.0, 8.0), vec2(72.0, 46.0));
+    panel(left, 6.0, t.card, t.stroke_strong);
+    panel(right, 8.0, t.card, t.cyan);
+    panel(egui::Rect::from_min_size(left.left_top() + vec2(4.0, 6.0), vec2(28.0, 7.0)), 3.0, t.accent, t.accent);
+    painter.rect_filled(egui::Rect::from_min_size(right.left_top() + vec2(6.0, 6.0), vec2(40.0, 4.0)), CornerRadius::ZERO, t.yellow);
+    for k in 0..3 {
+        let y = right.top() + 16.0 + k as f32 * 8.0;
+        painter.rect_filled(egui::Rect::from_min_size(egui::Pos2::new(right.left() + 6.0, y), vec2(52.0 - k as f32 * 10.0, 3.0)), CornerRadius::ZERO, if k == 0 { t.magenta } else { t.text3 });
     }
 }

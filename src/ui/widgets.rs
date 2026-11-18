@@ -18,6 +18,34 @@ pub fn card() -> Frame {
         .stroke(Stroke::new(1.0, if p.dark { p.stroke } else { mix(p.stroke, p.card, 0.4) }))
 }
 
+/// Fills `rect` with a gradient through `stops`, evenly spaced, from left
+/// to right (or top to bottom with `vertical`).
+pub fn paint_gradient(painter: &egui::Painter, rect: Rect, stops: &[Color32], vertical: bool) {
+    if stops.len() < 2 {
+        return;
+    }
+    let n = stops.len() - 1;
+    let mut mesh = egui::Mesh::default();
+    for (i, &c) in stops.iter().enumerate() {
+        let t = i as f32 / n as f32;
+        let (a, b) = if vertical {
+            let y = egui::lerp(rect.y_range(), t);
+            (Pos2::new(rect.left(), y), Pos2::new(rect.right(), y))
+        } else {
+            let x = egui::lerp(rect.x_range(), t);
+            (Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom()))
+        };
+        mesh.colored_vertex(a, c);
+        mesh.colored_vertex(b, c);
+    }
+    for i in 0..n as u32 {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 3, k + 2);
+    }
+    painter.add(mesh);
+}
+
 /// A round dot, or a square one in the Terminal theme.
 pub fn dot(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
     if pal().term {
